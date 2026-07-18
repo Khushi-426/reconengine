@@ -16,9 +16,7 @@ describe("JobWorker background processor", () => {
     });
   });
 
-  afterAll(async () => {
-    await testPool.end();
-  });
+
 
   beforeEach(async () => {
     const tables = [

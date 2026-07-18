@@ -70,7 +70,7 @@ export async function login(email, password, ipAddress, userAgent) {
   return {
     accessToken,
     refreshToken,
-    user: { id: user.user_id, email: user.email, fullName: user.full_name, role: user.role_name },
+    user: { id: user.user_id, userId: user.user_id, email: user.email, fullName: user.full_name, role: user.role_name },
   };
 }
 
@@ -101,12 +101,16 @@ export async function refresh(rawRefreshToken, ipAddress, userAgent) {
     expiresAt,
   });
 
-  const user = { user_id: session.user_id, email: session.email, role_name: session.role_name };
+  const user = { user_id: session.user_id, email: session.email, full_name: session.full_name, role_name: session.role_name };
   const accessToken = issueAccessToken(user, session.session_id);
 
   logger.info({ userId: session.user_id, sessionId: session.session_id }, "Session rotated successfully");
 
-  return { accessToken, refreshToken: raw };
+  return {
+    accessToken,
+    refreshToken: raw,
+    user: { id: session.user_id, userId: session.user_id, email: session.email, fullName: session.full_name, role: session.role_name },
+  };
 }
 
 export async function logout(rawRefreshToken) {

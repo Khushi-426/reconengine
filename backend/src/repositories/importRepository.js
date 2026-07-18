@@ -15,9 +15,20 @@ export async function createImportBatch(client, { sourceId, fileName, fileHash, 
     [sourceId, fileHash]
   );
   if (existing.rowCount > 0) {
+    const batch = existing.rows[0];
+    if (batch.status === 'FAILED') {
+      await client.query(
+        `UPDATE import_batches 
+         SET status = 'PROCESSING', file_name = $1, uploaded_by = $2, started_at = now(), error_message = NULL, row_count = 0, completed_at = NULL
+         WHERE batch_id = $3`,
+        [fileName, uploadedBy, batch.batch_id]
+      );
+      await client.query(`DELETE FROM external_statement_lines WHERE batch_id = $1`, [batch.batch_id]);
+      return batch.batch_id;
+    }
     throw new AppError(
       409,
-      `This exact file was already imported (batch #${existing.rows[0].batch_id}, status: ${existing.rows[0].status}).`,
+      `This exact file was already imported (batch #${batch.batch_id}, status: ${batch.status}).`,
       "DUPLICATE_IMPORT"
     );
   }
@@ -134,7 +145,7 @@ export async function validateStagingRecords(client) {
   // 4. Valid account reference resolution in database
   const accountCheck = await client.query(`
     SELECT DISTINCT s.account_ref FROM staging_statement_lines s
-    LEFT JOIN accounts a ON a.account_ref = s.account_ref
+    LEFT JOIN accounts a ON a.external_ref = s.account_ref
     WHERE a.account_id IS NULL
   `);
   if (accountCheck.rowCount > 0) {

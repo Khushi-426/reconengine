@@ -53,7 +53,7 @@ export async function createUserSession({ userId, tokenHash, expiresAt, ipAddres
 
 export async function findValidSession(tokenHash) {
   const result = await query(
-    `SELECT s.session_id, s.user_id, u.email, r.role_name, u.is_active
+    `SELECT s.session_id, s.user_id, u.email, u.full_name, r.role_name, u.is_active
      FROM user_sessions s
      JOIN users u ON u.user_id = s.user_id
      JOIN roles r ON r.role_id = u.role_id

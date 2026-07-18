@@ -32,7 +32,7 @@ export async function refreshHandler(req, res, next) {
       sameSite: "strict",
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
-    res.json({ accessToken: result.accessToken });
+    res.json({ accessToken: result.accessToken, user: result.user });
   } catch (err) {
     next(err);
   }

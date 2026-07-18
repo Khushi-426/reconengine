@@ -18,9 +18,7 @@ describe("matchingService integration", () => {
     });
   });
 
-  afterAll(async () => {
-    await testPool.end();
-  });
+
 
   beforeEach(async () => {
     // Truncate tables except users and roles

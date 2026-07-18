@@ -119,11 +119,11 @@ export async function findOrphanedJobs(client, timeoutSeconds) {
  */
 export async function findJobById(jobId) {
   const sql = `
-    SELECT job_id, job_type, status, priority, attempts, max_attempts, run_at, started_at, completed_at, last_heartbeat, error_message, created_at
+    SELECT job_id, job_type, status, priority, attempts, max_attempts, run_at, started_at, completed_at, last_heartbeat, error_message, created_at, worker_owner
     FROM background_jobs
     WHERE job_id = $1
     UNION ALL
-    SELECT job_id, job_type, 'DEAD_LETTER' AS status, priority, attempts, attempts AS max_attempts, failed_at AS run_at, NULL AS started_at, failed_at AS completed_at, NULL AS last_heartbeat, last_error AS error_message, failed_at AS created_at
+    SELECT job_id, job_type, 'DEAD_LETTER' AS status, priority, attempts, attempts AS max_attempts, failed_at AS run_at, NULL AS started_at, failed_at AS completed_at, NULL AS last_heartbeat, last_error AS error_message, failed_at AS created_at, NULL AS worker_owner
     FROM dead_letter_jobs
     WHERE job_id = $1
   `;
