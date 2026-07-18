@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  test_db:
+    image: postgres:15-alpine
+    container_name: reconengine_test_db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: change_me_in_env
+      POSTGRES_DB: reconengine_test
+    ports:
+      - "5433:5432"
+    tmpfs:
+      - /var/lib/postgresql/data

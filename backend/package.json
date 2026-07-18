@@ -1,0 +1,33 @@
+{
+  "name": "reconengine-backend",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node tests/run.js",
+    "perf": "node tests/perf.js"
+  },
+  "dependencies": {
+    "bcrypt": "^5.1.1",
+    "compression": "^1.7.4",
+    "cookie-parser": "^1.4.6",
+    "cors": "^2.8.5",
+    "csv-parse": "^5.5.6",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-rate-limit": "^7.2.0",
+    "helmet": "^7.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^1.4.5-lts.1",
+    "pg": "^8.11.5",
+    "pino": "^9.0.0",
+    "pino-http": "^10.0.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "autocannon": "^7.15.0",
+    "supertest": "^7.0.0",
+    "vitest": "^1.6.0"
+  }
+}
