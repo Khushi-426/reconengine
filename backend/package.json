@@ -23,10 +23,13 @@
     "pg": "^8.11.5",
     "pino": "^9.0.0",
     "pino-http": "^10.0.0",
+    "node-cron": "^3.0.3",
+    "pg-copy-streams": "^6.0.6",
     "zod": "^3.23.8"
   },
   "devDependencies": {
     "autocannon": "^7.15.0",
+    "pino-pretty": "^11.0.0",
     "supertest": "^7.0.0",
     "vitest": "^1.6.0"
   }

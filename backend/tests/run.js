@@ -7,22 +7,24 @@ import { fileURLToPath } from "url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 async function waitAndMigrate() {
-  const client = new pg.Client({
-    host: "localhost",
+  const dbConfig = {
+    host: "127.0.0.1",
     port: 5433,
     user: "postgres",
     password: "change_me_in_env",
     database: "reconengine_test",
-  });
+  };
 
   let connected = false;
-  let retries = 30;
+  let retries = 120; // Allow up to 60 seconds for initialization
 
   console.log("Waiting for test database to accept connections...");
   while (!connected && retries > 0) {
+    const tempClient = new pg.Client(dbConfig);
     try {
-      await client.connect();
+      await tempClient.connect();
       connected = true;
+      await tempClient.end();
     } catch (err) {
       retries--;
       await new Promise((resolve) => setTimeout(resolve, 500));
@@ -33,6 +35,9 @@ async function waitAndMigrate() {
     throw new Error("Could not connect to test database.");
   }
 
+  const client = new pg.Client(dbConfig);
+  await client.connect();
+
   console.log("Connected. Applying migrations...");
   const sqlFiles = [
     "../../db/01_schema.sql",
@@ -40,6 +45,11 @@ async function waitAndMigrate() {
     "../../db/03_views.sql",
     "../../db/04_matching_engine.sql",
     "../../db/05_security_grants.sql",
+    "../../db/06_jobs.sql",
+    "../../db/07_exceptions_workflow.sql",
+    "../../db/08_notifications.sql",
+    "../../db/09_partitioning_and_tuning.sql",
+    "../../db/10_security_improvements.sql",
   ];
 
   for (const file of sqlFiles) {
@@ -76,12 +86,12 @@ async function run() {
 
     // 3. Run tests using vitest
     console.log("Running test suite...");
-    execSync("npx vitest run", {
+    execSync("npx vitest run --no-file-parallelism --sequence.concurrent=false", {
       stdio: "inherit",
       env: {
         ...process.env,
         NODE_ENV: "test",
-        DB_HOST: "localhost",
+        DB_HOST: "127.0.0.1",
         DB_PORT: "5433",
         DB_NAME: "reconengine_test",
         DB_USER: "reconengine_app",

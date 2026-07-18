@@ -12,6 +12,8 @@ export const pool = new Pool({
   password: config.db.password,
   max: config.db.poolMax,
   idleTimeoutMillis: config.db.idleTimeoutMillis,
+  connectionTimeoutMillis: 2000,
+  maxUses: 7500,
   statement_timeout: config.db.statementTimeoutMillis, // guards against runaway queries
 });
 

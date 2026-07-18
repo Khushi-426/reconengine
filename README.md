@@ -180,10 +180,28 @@ block anyway).
 - Enforced defense-in-depth security: JWT + rotating refresh tokens, RBAC at
   the API layer, PostgreSQL row-level security at the data layer, and a
   DB-grant-enforced immutable audit log.
+- Implemented background job runner and scheduler utilizing PostgreSQL queue locks (`SKIP LOCKED`) and dynamic cron configs, ensuring separation between HTTP thread pool and processing engine.
 
 ---
 
-## 5. Honest scope note
+## 5. Job Queue & Background Processing Architecture
+
+ReconEngine delegates long-running matching actions and periodic maintenance to asynchronous background workers. 
+
+- **Distributed Queueing**: Powered directly by PostgreSQL using transaction-safe row locks (`SELECT ... FOR UPDATE SKIP LOCKED`).
+- **Heartbeat & Failover Recovery**: Worker nodes write periodic heartbeats to active jobs. A recovery monitor detects worker crashes (deadlocks, OOM, timeouts) and schedules automatic retries.
+- **Retry Mechanics**: Employs exponential backoff delay based on the current execution attempt. Exceeding maximum retries pushes jobs to the `dead_letter_jobs` table.
+- **Dynamic Scheduler**: Dynamic database-driven scheduling maps cron expressions in `scheduler_configs` to queue triggers.
+
+### New API Endpoints
+- `POST /api/recon/runs` - Queues a reconciliation run job. Returns `202 Accepted` immediately with the `jobId`.
+- `GET /api/recon/jobs/:jobId` - Inspects the current state of a background job.
+- `GET /api/recon/runs` - Returns a paginated list of matching run metrics.
+- `GET /api/imports/batches` - Returns a paginated list of ingested file statements.
+
+---
+
+## 6. Honest scope note
 
 This is a strong interview-ready scaffold, not a finished commercial product.
 Before presenting it as "production," you should: add automated tests

@@ -17,6 +17,13 @@ CREATE TABLE roles (
     description     TEXT
 );
 
+INSERT INTO roles (role_id, role_name, description) VALUES
+(1, 'ADMIN', 'System Administrator with full access'),
+(2, 'APPROVER', 'Operations Approver with sign-off authority'),
+(3, 'ANALYST', 'Operations Analyst investigating breaks'),
+(4, 'AUDITOR', 'Read-only Auditor for compliance checks')
+ON CONFLICT (role_id) DO NOTHING;
+
 CREATE TABLE users (
     user_id         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     email           VARCHAR(255) NOT NULL UNIQUE,
@@ -102,6 +109,13 @@ CREATE TABLE import_sources (
     source_name     VARCHAR(50) NOT NULL UNIQUE,    -- INTERNAL_LEDGER, SWIFT_MT940, CARD_NETWORK, CSV_STATEMENT
     file_format     VARCHAR(20) NOT NULL
 );
+
+INSERT INTO import_sources (source_id, source_name, file_format) VALUES
+(1, 'INTERNAL_LEDGER', 'DATABASE'),
+(2, 'SWIFT_MT940', 'TXT'),
+(3, 'CARD_NETWORK', 'JSON'),
+(4, 'CSV_STATEMENT', 'CSV')
+ON CONFLICT (source_id) DO NOTHING;
 
 CREATE TABLE import_batches (
     batch_id        BIGSERIAL PRIMARY KEY,

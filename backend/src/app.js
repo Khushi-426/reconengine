@@ -5,6 +5,8 @@ import compression from "compression";
 import cookieParser from "cookie-parser";
 import pinoHttp from "pino-http";
 
+import crypto from "crypto";
+import { correlationIdMiddleware } from "./middleware/correlationMiddleware.js";
 import { logger } from "./config/logger.js";
 import { generalLimiter } from "./middleware/rateLimiter.js";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler.js";
@@ -13,6 +15,8 @@ import authRoutes from "./routes/authRoutes.js";
 import exceptionsRoutes from "./routes/exceptionsRoutes.js";
 import importRoutes from "./routes/importRoutes.js";
 import reconciliationRoutes from "./routes/reconciliationRoutes.js";
+import notificationsRoutes from "./routes/notificationsRoutes.js";
+import operationsRoutes from "./routes/operationsRoutes.js";
 
 export function createApp() {
   const app = express();
@@ -28,7 +32,16 @@ export function createApp() {
   app.use(compression());
   app.use(express.json({ limit: "2mb" }));
   app.use(cookieParser());
-  app.use(pinoHttp({ logger }));
+  app.use(correlationIdMiddleware);
+  app.use(
+    pinoHttp({
+      logger,
+      genReqId: (req) => req.correlationId || crypto.randomUUID(),
+      customAttributeKeys: {
+        reqId: "correlationId",
+      },
+    })
+  );
   app.use(generalLimiter);
 
   // --- health check (no auth — used by load balancer) -----------------
@@ -39,6 +52,8 @@ export function createApp() {
   app.use("/api/exceptions", exceptionsRoutes);
   app.use("/api/imports", importRoutes);
   app.use("/api/recon", reconciliationRoutes);
+  app.use("/api/notifications", notificationsRoutes);
+  app.use("/api/operations", operationsRoutes);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

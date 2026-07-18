@@ -39,6 +39,9 @@ export async function findExceptions({ status, assignedTo, exceptionType, search
     SELECT
       e.exception_id, e.run_id, e.exception_type, e.amount_diff, e.status,
       e.version, e.assigned_to, e.created_at, e.resolved_at,
+      e.assigned_at, e.in_progress_at, e.approved_at, e.approved_by, e.closed_at, e.closed_by, e.sla_deadline,
+      CASE WHEN e.status NOT IN ('APPROVED', 'CLOSED') AND now() > e.sla_deadline THEN TRUE ELSE FALSE END AS is_sla_breached,
+      EXTRACT(EPOCH FROM (e.sla_deadline - now()))::INT AS time_remaining_seconds,
       lt.txn_ref  AS ledger_ref, lt.amount AS ledger_amount, lt.value_date AS ledger_value_date,
       ex.external_ref, ex.amount AS external_amount, ex.value_date AS external_value_date,
       u.full_name AS assigned_to_name,
@@ -62,25 +65,97 @@ export async function findExceptions({ status, assignedTo, exceptionType, search
 }
 
 /**
- * Resolve an exception using OPTIMISTIC LOCKING.
- * The client must supply the `version` it last read. If another user resolved
- * or reassigned the same exception in between, this UPDATE matches zero rows
- * and we surface a 409 Conflict rather than silently overwriting their change.
- *
- * Must be called with a transaction-scoped `client` from withTransaction().
+ * Start work on an exception — moves it from ASSIGNED to IN_PROGRESS.
  */
-export async function resolveExceptionWithLock(client, { exceptionId, expectedVersion, resolvedBy, resolutionNote, status }) {
+export async function startWorkOnException(client, { exceptionId, analystId }) {
   const result = await client.query(
     `UPDATE reconciliation_exceptions
-       SET status = $1, resolution_note = $2, resolved_by = $3, resolved_at = now()
-     WHERE exception_id = $4 AND version = $5
+     SET status = 'IN_PROGRESS', in_progress_at = now()
+     WHERE exception_id = $1 AND assigned_to = $2 AND status = 'ASSIGNED'
      RETURNING exception_id, version, status`,
-    [status, resolutionNote, resolvedBy, exceptionId, expectedVersion]
+    [exceptionId, analystId]
+  );
+  if (result.rowCount === 0) {
+    throw new AppError(400, "Cannot start work. Exception must be assigned to you and in ASSIGNED status.");
+  }
+  return result.rows[0];
+}
+
+/**
+ * Resolve an exception using OPTIMISTIC LOCKING.
+ */
+export async function resolveExceptionWithLock(client, { exceptionId, expectedVersion, resolvedBy, resolutionNote }) {
+  const result = await client.query(
+    `UPDATE reconciliation_exceptions
+       SET status = 'RESOLVED', resolution_note = $1, resolved_by = $2, resolved_at = now()
+     WHERE exception_id = $3 AND version = $4
+     RETURNING exception_id, version, status`,
+    [resolutionNote, resolvedBy, exceptionId, expectedVersion]
   );
 
   if (result.rowCount === 0) {
-    // Either the row doesn't exist, or (far more likely) someone else updated
-    // it first and the version we had is stale.
+    const existing = await client.query(
+      `SELECT exception_id, version, status FROM reconciliation_exceptions WHERE exception_id = $1`,
+      [exceptionId]
+    );
+    if (existing.rowCount === 0) {
+      throw new AppError(404, "Exception not found");
+    }
+    throw new AppError(
+      409,
+      "This exception was modified by another user since you loaded it. Refresh and try again.",
+      "OPTIMISTIC_LOCK_CONFLICT",
+      { currentVersion: existing.rows[0].version, currentStatus: existing.rows[0].status }
+    );
+  }
+
+  return result.rows[0];
+}
+
+/**
+ * Approve an exception resolution using OPTIMISTIC LOCKING.
+ */
+export async function approveExceptionWithLock(client, { exceptionId, expectedVersion, approvedBy }) {
+  const result = await client.query(
+    `UPDATE reconciliation_exceptions
+       SET status = 'APPROVED', approved_by = $1, approved_at = now()
+     WHERE exception_id = $2 AND version = $3
+     RETURNING exception_id, version, status`,
+    [approvedBy, exceptionId, expectedVersion]
+  );
+
+  if (result.rowCount === 0) {
+    const existing = await client.query(
+      `SELECT exception_id, version, status FROM reconciliation_exceptions WHERE exception_id = $1`,
+      [exceptionId]
+    );
+    if (existing.rowCount === 0) {
+      throw new AppError(404, "Exception not found");
+    }
+    throw new AppError(
+      409,
+      "This exception was modified by another user since you loaded it. Refresh and try again.",
+      "OPTIMISTIC_LOCK_CONFLICT",
+      { currentVersion: existing.rows[0].version, currentStatus: existing.rows[0].status }
+    );
+  }
+
+  return result.rows[0];
+}
+
+/**
+ * Close an approved exception using OPTIMISTIC LOCKING.
+ */
+export async function closeExceptionWithLock(client, { exceptionId, expectedVersion, closedBy }) {
+  const result = await client.query(
+    `UPDATE reconciliation_exceptions
+       SET status = 'CLOSED', closed_by = $1, closed_at = now()
+     WHERE exception_id = $2 AND version = $3
+     RETURNING exception_id, version, status`,
+    [closedBy, exceptionId, expectedVersion]
+  );
+
+  if (result.rowCount === 0) {
     const existing = await client.query(
       `SELECT exception_id, version, status FROM reconciliation_exceptions WHERE exception_id = $1`,
       [exceptionId]
@@ -110,12 +185,15 @@ export async function assignExceptionPessimistic(client, { exceptionId, assignTo
     [exceptionId]
   );
   if (locked.rowCount === 0) throw new AppError(404, "Exception not found");
-  if (locked.rows[0].status === "RESOLVED") {
-    throw new AppError(409, "Cannot reassign an already-resolved exception");
+  if (['RESOLVED', 'APPROVED', 'CLOSED'].includes(locked.rows[0].status)) {
+    throw new AppError(409, "Cannot reassign a resolved, approved, or closed exception");
   }
 
   const updated = await client.query(
-    `UPDATE reconciliation_exceptions SET assigned_to = $1, status = 'IN_REVIEW' WHERE exception_id = $2 RETURNING *`,
+    `UPDATE reconciliation_exceptions 
+     SET assigned_to = $1, status = 'ASSIGNED', assigned_at = now() 
+     WHERE exception_id = $2 
+     RETURNING *`,
     [assignTo, exceptionId]
   );
   return updated.rows[0];

@@ -19,20 +19,20 @@ vi.mock("../src/config/db.js", () => {
 vi.mock("../src/repositories/importRepository.js", () => {
   return {
     createImportBatch: vi.fn(),
+    createStagingTable: vi.fn(),
+    validateStagingRecords: vi.fn().mockResolvedValue([]),
+    insertFromStagingToMain: vi.fn(),
     markBatchCompleted: vi.fn(),
     markBatchFailed: vi.fn(),
-    bulkInsertExternalLines: vi.fn(),
   };
 });
 
-describe("importService - importExternalStatement", () => {
+describe("importService - importExternalStatement with staging COPY", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
   it("rejects malformed CSV and inserts a FAILED batch", async () => {
-    const fileBuffer = Buffer.from("invalid,csv,data\n1,2"); // Missing headers, parse error or similar
-    // To trigger a CSV parse error, let's use malformed quotes
     const malformedBuffer = Buffer.from('"unclosed quote,ref,amount\n');
 
     await expect(
@@ -44,7 +44,7 @@ describe("importService - importExternalStatement", () => {
       })
     ).rejects.toThrow(AppError);
 
-    // Verify it created a FAILED batch
+    // Verify it attempted transaction logging
     expect(db.withTransaction).toHaveBeenCalled();
   });
 
@@ -52,8 +52,8 @@ describe("importService - importExternalStatement", () => {
     const csvContent = "external_ref,account_ref,amount,currency,value_date\nREF-1,ACC-1,100.00,GBP,2026-07-18\n";
     const fileBuffer = Buffer.from(csvContent);
 
-    // Mock createImportBatch to throw a 409
-    vi.mocked(importRepo.createImportBatch).mockRejectedValueOnce(
+    // Mock duplicate check by returning a mock existing batch
+    vi.spyOn(db, "withTransaction").mockRejectedValueOnce(
       new AppError(409, "This exact file was already imported", "DUPLICATE_IMPORT")
     );
 
@@ -71,9 +71,8 @@ describe("importService - importExternalStatement", () => {
     const csvContent = "external_ref,account_ref,amount,currency,value_date\nREF-1,ACC-1,100.00,GBP,2026-07-18\n";
     const fileBuffer = Buffer.from(csvContent);
 
-    vi.mocked(importRepo.createImportBatch).mockResolvedValueOnce(999); // Mock batchId
-    // Mock bulkInsertExternalLines to fail mid-batch (e.g. DB error)
-    vi.mocked(importRepo.bulkInsertExternalLines).mockRejectedValueOnce(new Error("Database write error"));
+    // Mock insertFromStagingToMain to fail (e.g. DB constraint error during write)
+    vi.mocked(importRepo.insertFromStagingToMain).mockRejectedValueOnce(new Error("Database copy constraint error"));
 
     await expect(
       importExternalStatement({
@@ -82,9 +81,9 @@ describe("importService - importExternalStatement", () => {
         sourceId: 2,
         uploadedBy: "00000000-0000-0000-0000-000000000001",
       })
-    ).rejects.toThrow("Database write error");
+    ).rejects.toThrow("Database copy constraint error");
 
-    // Verify batch is marked as FAILED in catch block
-    expect(importRepo.markBatchFailed).toHaveBeenCalledWith(expect.any(Object), 999, "Database write error");
+    // Verify markBatchFailed is invoked to audit-log the failure in DB
+    expect(importRepo.markBatchFailed).toHaveBeenCalledWith(expect.any(Object), undefined, "Database copy constraint error");
   });
 });

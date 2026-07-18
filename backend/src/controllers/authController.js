@@ -3,7 +3,9 @@ import * as authService from "../services/authService.js";
 export async function loginHandler(req, res, next) {
   try {
     const { email, password } = req.body;
-    const result = await authService.login(email, password);
+    const ip = req.ip || req.headers["x-forwarded-for"] || req.socket.remoteAddress;
+    const userAgent = req.headers["user-agent"] || "";
+    const result = await authService.login(email, password, ip, userAgent);
     // refresh token as httpOnly cookie — never exposed to JS (XSS mitigation)
     res.cookie("refreshToken", result.refreshToken, {
       httpOnly: true,
@@ -21,7 +23,9 @@ export async function refreshHandler(req, res, next) {
   try {
     const token = req.cookies?.refreshToken;
     if (!token) return res.status(401).json({ error: { message: "No refresh token provided" } });
-    const result = await authService.refresh(token);
+    const ip = req.ip || req.headers["x-forwarded-for"] || req.socket.remoteAddress;
+    const userAgent = req.headers["user-agent"] || "";
+    const result = await authService.refresh(token, ip, userAgent);
     res.cookie("refreshToken", result.refreshToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",

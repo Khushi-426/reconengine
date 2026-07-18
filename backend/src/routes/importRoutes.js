@@ -1,5 +1,6 @@
 import { Router } from "express";
 import multer from "multer";
+import { idempotencyKeyGuard } from "../middleware/idempotencyMiddleware.js";
 import { uploadStatementHandler, listImportBatchesHandler } from "../controllers/importController.js";
 import { authenticate, authorize } from "../middleware/auth.js";
 import { bulkImportLimiter } from "../middleware/rateLimiter.js";
@@ -19,9 +20,11 @@ const upload = multer({
 
 const router = Router();
 
+router.use(authenticate);
+router.use(idempotencyKeyGuard);
+
 router.post(
   "/statements",
-  authenticate,
   authorize("ANALYST", "APPROVER", "ADMIN"),
   bulkImportLimiter,
   upload.single("file"),
@@ -30,7 +33,6 @@ router.post(
 
 router.get(
   "/batches",
-  authenticate,
   authorize("ANALYST", "APPROVER", "ADMIN", "AUDITOR"),
   listImportBatchesHandler
 );

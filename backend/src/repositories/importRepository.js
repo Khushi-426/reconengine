@@ -84,6 +84,102 @@ export async function bulkInsertExternalLines(client, batchId, sourceId, rows) {
   return inserted;
 }
 
+/**
+ * Creates temporary staging table for COPY streaming.
+ */
+export async function createStagingTable(client) {
+  await client.query(`
+    CREATE TEMP TABLE staging_statement_lines (
+      external_ref          VARCHAR(100),
+      account_ref           VARCHAR(50),
+      amount                NUMERIC(15,2),
+      currency              VARCHAR(3),
+      value_date            DATE,
+      is_batched_settlement BOOLEAN
+    ) ON COMMIT DROP
+  `);
+}
+
+/**
+ * Validates all records in the staging table in bulk using set-based SQL checks.
+ */
+export async function validateStagingRecords(client) {
+  const errors = [];
+
+  // 1. Required column null check
+  const nullCheck = await client.query(`
+    SELECT COUNT(*) AS cnt FROM staging_statement_lines
+    WHERE external_ref IS NULL OR account_ref IS NULL OR amount IS NULL OR currency IS NULL OR value_date IS NULL
+  `);
+  if (parseInt(nullCheck.rows[0].cnt, 10) > 0) {
+    errors.push("Missing required fields (external_ref, account_ref, amount, currency, or value_date) on some rows");
+  }
+
+  // 2. Amount verification
+  const amountCheck = await client.query(`
+    SELECT COUNT(*) AS cnt FROM staging_statement_lines WHERE amount <= 0
+  `);
+  if (parseInt(amountCheck.rows[0].cnt, 10) > 0) {
+    errors.push("Transaction amount must be a positive number on all rows");
+  }
+
+  // 3. Currency ISO code verification
+  const currencyCheck = await client.query(`
+    SELECT COUNT(*) AS cnt FROM staging_statement_lines WHERE LENGTH(currency) != 3 OR currency ~ '[^a-zA-Z]'
+  `);
+  if (parseInt(currencyCheck.rows[0].cnt, 10) > 0) {
+    errors.push("Currency must be a 3-letter alphabetical ISO code");
+  }
+
+  // 4. Valid account reference resolution in database
+  const accountCheck = await client.query(`
+    SELECT DISTINCT s.account_ref FROM staging_statement_lines s
+    LEFT JOIN accounts a ON a.account_ref = s.account_ref
+    WHERE a.account_id IS NULL
+  `);
+  if (accountCheck.rowCount > 0) {
+    const unmapped = accountCheck.rows.map(r => `'${r.account_ref}'`).slice(0, 10).join(", ");
+    errors.push(`Account reference(s) not found in system: ${unmapped}${accountCheck.rowCount > 10 ? "..." : ""}`);
+  }
+
+  // 5. Duplicate external reference verification inside the file
+  const internalDupCheck = await client.query(`
+    SELECT external_ref, COUNT(*) FROM staging_statement_lines
+    GROUP BY external_ref HAVING COUNT(*) > 1 LIMIT 5
+  `);
+  if (internalDupCheck.rowCount > 0) {
+    const dups = internalDupCheck.rows.map(r => `'${r.external_ref}'`).join(", ");
+    errors.push(`Duplicate external reference(s) found within file: ${dups}`);
+  }
+
+  // 6. Duplicate external reference verification against existing database entries
+  const dbDupCheck = await client.query(`
+    SELECT DISTINCT s.external_ref FROM staging_statement_lines s
+    JOIN external_statement_lines e ON e.external_ref = s.external_ref
+    LIMIT 5
+  `);
+  if (dbDupCheck.rowCount > 0) {
+    const dups = dbDupCheck.rows.map(r => `'${r.external_ref}'`).join(", ");
+    errors.push(`Duplicate external reference(s) already committed in database: ${dups}`);
+  }
+
+  return errors;
+}
+
+/**
+ * Bulk inserts staging rows into main statement lines table.
+ */
+export async function insertFromStagingToMain(client, batchId, sourceId) {
+  const insertSql = `
+    INSERT INTO external_statement_lines (batch_id, source_id, external_ref, account_ref, amount, currency, value_date, is_batched_settlement)
+    SELECT $1, $2, s.external_ref, s.account_ref, s.amount, UPPER(s.currency), s.value_date, COALESCE(s.is_batched_settlement, false)
+    FROM staging_statement_lines s
+    RETURNING ext_line_id
+  `;
+  const result = await client.query(insertSql, [batchId, sourceId]);
+  return result.rowCount;
+}
+
 export async function findImportBatches({ page = 1, pageSize = 20 } = {}) {
   const offset = (page - 1) * pageSize;
   const sql = `

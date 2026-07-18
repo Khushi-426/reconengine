@@ -2,7 +2,7 @@ import pg from "pg";
 import bcrypt from "bcrypt";
 
 const testDbConfig = {
-  host: "localhost",
+  host: "127.0.0.1",
   port: 5433,
   user: "postgres", // Connect as postgres superuser to clean/seed without RLS issues
   password: "change_me_in_env",

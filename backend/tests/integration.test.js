@@ -2,6 +2,9 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import request from "supertest";
 import { createApp } from "../src/app.js";
 import { testPool, cleanDb, createTestUser, seedFixture } from "./helper.js";
+import { JobWorker } from "../src/jobs/worker.js";
+import { claimNextJob } from "../src/repositories/jobsRepository.js";
+import { withTransaction } from "../src/config/db.js";
 
 const app = createApp();
 
@@ -9,7 +12,6 @@ describe("ReconEngine integration flow", () => {
   let userId;
   let token;
   let accountId;
-  let accountRef = "ACC-TEST";
 
   beforeAll(async () => {
     await cleanDb();
@@ -24,9 +26,7 @@ describe("ReconEngine integration flow", () => {
     accountId = fixtures.accountId;
   });
 
-  afterAll(async () => {
-    await testPool.end();
-  });
+
 
   it("1. logs in successfully and returns JWT token", async () => {
     const res = await request(app)
@@ -53,7 +53,7 @@ describe("ReconEngine integration flow", () => {
     expect(res.body.rowsImported).toBe(1);
   });
 
-  it("3. triggers a reconciliation run", async () => {
+  it("3. triggers a reconciliation run (async job) and runs it with worker", async () => {
     // Add an unmatched ledger line to produce an exception
     await testPool.query(
       `INSERT INTO ledger_transactions (account_id, txn_ref, txn_type, amount, currency, value_date)
@@ -66,14 +66,23 @@ describe("ReconEngine integration flow", () => {
       .set("Authorization", `Bearer ${token}`)
       .send({ runDate: "2026-07-18" });
 
-    expect(res.status).toBe(201);
-    expect(res.body).toHaveProperty("runId");
+    expect(res.status).toBe(202);
+    expect(res.body).toHaveProperty("jobId");
+
+    // Execute the job synchronously in-process
+    const worker = new JobWorker();
+    const claimed = await withTransaction(async (client) => {
+      return claimNextJob(client, worker.workerId);
+    });
+
+    expect(claimed).not.toBeNull();
+    await worker.executeJob(claimed);
   });
 
-  it("4. lists reconciliation exceptions and handles resolution with optimistic locking", async () => {
-    // List exceptions
+  it("4. processes exception through assignment, start work, resolve, approve, and close workflow", async () => {
+    // 1. List exceptions in UNASSIGNED state
     const listRes = await request(app)
-      .get("/api/exceptions?status=OPEN")
+      .get("/api/exceptions?status=UNASSIGNED")
       .set("Authorization", `Bearer ${token}`);
 
     expect(listRes.status).toBe(200);
@@ -81,31 +90,72 @@ describe("ReconEngine integration flow", () => {
 
     const exception = listRes.body.data[0];
     const exceptionId = exception.exception_id;
-    const version = exception.version;
+    let version = exception.version;
 
-    // First resolve succeeds
+    // 2. Assign exception to user
+    const assignRes = await request(app)
+      .patch(`/api/exceptions/${exceptionId}/assign`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({ assignTo: userId });
+
+    expect(assignRes.status).toBe(200);
+    expect(assignRes.body.status).toBe("ASSIGNED");
+
+    // 3. Start work on the exception
+    const startRes = await request(app)
+      .patch(`/api/exceptions/${exceptionId}/start-work`)
+      .set("Authorization", `Bearer ${token}`);
+
+    expect(startRes.status).toBe(200);
+    expect(startRes.body.status).toBe("IN_PROGRESS");
+    version = startRes.body.version;
+
+    // 4. Resolve the exception
     const resolveRes = await request(app)
       .patch(`/api/exceptions/${exceptionId}/resolve`)
       .set("Authorization", `Bearer ${token}`)
       .send({
         expectedVersion: version,
         resolutionNote: "Matched manually after audit confirmation",
-        decision: "RESOLVED",
       });
 
     expect(resolveRes.status).toBe(200);
+    expect(resolveRes.body.status).toBe("RESOLVED");
+    version = resolveRes.body.version;
 
-    // Stale resolve fails with 409 conflict
+    // 5. Stale resolution attempt fails with 409 conflict
     const staleRes = await request(app)
       .patch(`/api/exceptions/${exceptionId}/resolve`)
       .set("Authorization", `Bearer ${token}`)
       .send({
-        expectedVersion: version, // using the stale version
+        expectedVersion: version - 1, // stale
         resolutionNote: "Another concurrent resolve attempt",
-        decision: "RESOLVED",
       });
 
     expect(staleRes.status).toBe(409);
     expect(staleRes.body.error.code).toBe("OPTIMISTIC_LOCK_CONFLICT");
+
+    // 6. Approve the resolution
+    const approveRes = await request(app)
+      .patch(`/api/exceptions/${exceptionId}/approve`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        expectedVersion: version,
+      });
+
+    expect(approveRes.status).toBe(200);
+    expect(approveRes.body.status).toBe("APPROVED");
+    version = approveRes.body.version;
+
+    // 7. Close the exception
+    const closeRes = await request(app)
+      .patch(`/api/exceptions/${exceptionId}/close`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        expectedVersion: version,
+      });
+
+    expect(closeRes.status).toBe(200);
+    expect(closeRes.body.status).toBe("CLOSED");
   });
 });

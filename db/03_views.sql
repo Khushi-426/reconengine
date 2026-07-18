@@ -94,7 +94,7 @@ CREATE OR REPLACE FUNCTION fn_refresh_daily_summary() RETURNS VOID AS $$
 BEGIN
     REFRESH MATERIALIZED VIEW CONCURRENTLY mv_daily_reconciliation_summary;
 END;
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- View: ops-user workload (used by "assign exceptions" feature)
 CREATE OR REPLACE VIEW v_analyst_workload AS

@@ -17,17 +17,63 @@ export async function listExceptionsHandler(req, res, next) {
   }
 }
 
+export async function startWorkExceptionHandler(req, res, next) {
+  try {
+    const { exceptionId } = req.params;
+    const result = await exceptionsService.startWorkException({
+      exceptionId,
+      analystId: req.user.userId,
+      userId: req.user.userId,
+      userRole: req.user.role,
+    });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
 export async function resolveExceptionHandler(req, res, next) {
   try {
     const { exceptionId } = req.params;
-    const { expectedVersion, resolutionNote, decision } = req.body;
+    const { expectedVersion, resolutionNote } = req.body;
     const result = await exceptionsService.resolveException({
       exceptionId,
       expectedVersion,
       resolvedBy: req.user.userId,
       resolvedByRole: req.user.role,
       resolutionNote,
-      decision,
+    });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function approveExceptionHandler(req, res, next) {
+  try {
+    const { exceptionId } = req.params;
+    const { expectedVersion } = req.body;
+    const result = await exceptionsService.approveException({
+      exceptionId,
+      expectedVersion,
+      approvedBy: req.user.userId,
+      approvedByRole: req.user.role,
+    });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function closeExceptionHandler(req, res, next) {
+  try {
+    const { exceptionId } = req.params;
+    const { expectedVersion } = req.body;
+    const result = await exceptionsService.closeException({
+      exceptionId,
+      expectedVersion,
+      closedBy: req.user.userId,
+      closedByRole: req.user.role,
     });
     res.json(result);
   } catch (err) {

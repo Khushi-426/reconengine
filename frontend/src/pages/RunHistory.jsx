@@ -42,11 +42,34 @@ export default function RunHistory() {
     setSuccessMsg(null);
     try {
       const res = await api.post("/recon/runs", { runDate });
-      setSuccessMsg(`Reconciliation run successfully completed! Run ID: #${res.runId}. Matched: ${res.stats.matchedCount}, Exceptions: ${res.stats.exceptionCount}`);
-      setPage(1);
-      fetchRuns();
+      const jobId = res.jobId;
+      setSuccessMsg(`Reconciliation run queued. Job ID: #${jobId}. In progress...`);
+
+      let finished = false;
+      let checkAttempts = 0;
+      while (!finished && checkAttempts < 60) {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        const job = await api.get(`/recon/jobs/${jobId}`);
+        if (job.status === "COMPLETED") {
+          finished = true;
+          setSuccessMsg(`Reconciliation run #${jobId} completed successfully!`);
+          setPage(1);
+          fetchRuns();
+        } else if (job.status === "FAILED" || job.status === "DEAD_LETTER") {
+          finished = true;
+          throw new Error(job.error_message || "Job execution failed");
+        } else {
+          setSuccessMsg(`Reconciliation run #${jobId} is currently ${job.status}...`);
+        }
+        checkAttempts++;
+      }
+
+      if (!finished) {
+        throw new Error("Job execution took too long. Check matching runs list for updates.");
+      }
     } catch (err) {
       setErrorMsg(err.message || "Failed to trigger reconciliation run.");
+      setSuccessMsg(null);
     } finally {
       setTriggering(false);
     }

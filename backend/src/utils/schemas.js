@@ -6,7 +6,7 @@ export const loginSchema = z.object({
 });
 
 export const listExceptionsQuerySchema = z.object({
-  status: z.enum(["OPEN", "IN_REVIEW", "RESOLVED", "WRITTEN_OFF"]).optional(),
+  status: z.enum(["UNASSIGNED", "ASSIGNED", "IN_PROGRESS", "RESOLVED", "APPROVED", "CLOSED"]).optional(),
   assignedTo: z.string().uuid().optional(),
   exceptionType: z.enum(["MISSING_EXTERNAL", "MISSING_INTERNAL", "AMOUNT_MISMATCH", "DUPLICATE", "TIMING"]).optional(),
   search: z.string().max(100).optional(),
@@ -17,7 +17,10 @@ export const listExceptionsQuerySchema = z.object({
 export const resolveExceptionSchema = z.object({
   expectedVersion: z.number().int().min(1),
   resolutionNote: z.string().min(5).max(2000),
-  decision: z.enum(["RESOLVED", "WRITTEN_OFF"]),
+});
+
+export const workflowActionSchema = z.object({
+  expectedVersion: z.number().int().min(1),
 });
 
 export const assignExceptionSchema = z.object({

@@ -3,7 +3,6 @@ import { api } from "../api/client.js";
 
 export default function ResolveExceptionModal({ exception, onClose, onResolved }) {
   const [note, setNote] = useState("");
-  const [decision, setDecision] = useState("RESOLVED");
   const [submitting, setSubmitting] = useState(false);
   const [conflict, setConflict] = useState(null);
   const [errorMsg, setErrorMsg] = useState(null);
@@ -17,13 +16,10 @@ export default function ResolveExceptionModal({ exception, onClose, onResolved }
       await api.patch(`/exceptions/${exception.exception_id}/resolve`, {
         expectedVersion: exception.version,
         resolutionNote: note,
-        decision,
       });
       onResolved();
     } catch (err) {
       if (err.code === "OPTIMISTIC_LOCK_CONFLICT") {
-        // This is the concurrency scenario in action: another analyst
-        // resolved this exact exception between page load and submit.
         setConflict(err.details);
       } else {
         setErrorMsg(err.message);
@@ -48,17 +44,7 @@ export default function ResolveExceptionModal({ exception, onClose, onResolved }
         {errorMsg && <div className="bg-red-50 text-red-700 text-sm px-3 py-2 rounded-md mb-4">{errorMsg}</div>}
 
         <form onSubmit={handleSubmit}>
-          <label className="block text-sm font-medium text-slate-700 mb-1">Decision</label>
-          <select
-            value={decision}
-            onChange={(e) => setDecision(e.target.value)}
-            className="w-full border border-slate-300 rounded-md px-3 py-2 mb-4 text-sm"
-          >
-            <option value="RESOLVED">Resolved (matched manually)</option>
-            <option value="WRITTEN_OFF">Written off (requires approver role)</option>
-          </select>
-
-          <label className="block text-sm font-medium text-slate-700 mb-1">Resolution note</label>
+          <label className="block text-sm font-medium text-slate-700 mb-1">Resolution Audit Note</label>
           <textarea
             required
             minLength={5}

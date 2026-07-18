@@ -34,3 +34,7 @@ CREATE POLICY analyst_sees_own_or_unassigned ON reconciliation_exceptions
         OR assigned_to = current_setting('app.current_user_id', true)::UUID
         OR assigned_to IS NULL
     );
+
+-- Enforce default grants on any tables/sequences created in the future
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO reconengine_app;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO reconengine_app;
