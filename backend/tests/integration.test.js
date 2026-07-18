@@ -38,7 +38,18 @@ describe("ReconEngine integration flow", () => {
     token = res.body.accessToken;
   });
 
-  it("2. uploads a statement CSV file", async () => {
+  it("2. rejects reconciliation before an external settlement batch is imported", async () => {
+    const res = await request(app)
+      .post("/api/recon/runs")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ runDate: "2026-07-18" });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error.message).toBe("No external settlement batch available for reconciliation.");
+    expect(res.body.error.code).toBe("NO_EXTERNAL_SETTLEMENT_BATCH");
+  });
+
+  it("3. uploads a statement CSV file", async () => {
     const csvContent =
       "external_ref,account_ref,amount,currency,value_date,is_batched_settlement\n" +
       "EXT-INT-1,ACC-TEST,150.00,GBP,2026-07-18,false\n";
@@ -53,7 +64,7 @@ describe("ReconEngine integration flow", () => {
     expect(res.body.rowsImported).toBe(1);
   });
 
-  it("3. triggers a reconciliation run (async job) and runs it with worker", async () => {
+  it("4. triggers a reconciliation run (async job) and runs it with worker", async () => {
     // Add an unmatched ledger line to produce an exception
     await testPool.query(
       `INSERT INTO ledger_transactions (account_id, txn_ref, txn_type, amount, currency, value_date)
@@ -79,7 +90,7 @@ describe("ReconEngine integration flow", () => {
     await worker.executeJob(claimed);
   });
 
-  it("4. processes exception through assignment, start work, resolve, approve, and close workflow", async () => {
+  it("5. processes exception through assignment, start work, resolve, approve, and close workflow", async () => {
     // 1. List exceptions in UNASSIGNED state
     const listRes = await request(app)
       .get("/api/exceptions?status=UNASSIGNED")

@@ -32,6 +32,7 @@ async function run() {
     }
   } catch (err) {
     console.error("Failed to seed users:", err);
+    process.exitCode = 1;
   } finally {
     await client.end();
   }

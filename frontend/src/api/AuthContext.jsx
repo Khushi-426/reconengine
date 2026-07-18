@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback } from "react";
+import React, { createContext, useContext, useState, useCallback, useEffect } from "react";
 import { api, setAccessToken } from "../api/client.js";
 
 const AuthContext = createContext(null);
@@ -7,6 +7,22 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [initializing, setInitializing] = useState(true);
+
+  useEffect(() => {
+    async function restoreSession() {
+      try {
+        const data = await api.post("/auth/refresh");
+        setAccessToken(data.accessToken);
+        setUser(data.user);
+      } catch (err) {
+        // Silent catch: not authenticated, user stays null
+      } finally {
+        setInitializing(false);
+      }
+    }
+    restoreSession();
+  }, []);
 
   const login = useCallback(async (email, password) => {
     setLoading(true);
@@ -31,7 +47,7 @@ export function AuthProvider({ children }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, login, logout, loading, error }}>
+    <AuthContext.Provider value={{ user, login, logout, loading, error, initializing }}>
       {children}
     </AuthContext.Provider>
   );

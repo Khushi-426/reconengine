@@ -1,7 +1,7 @@
 import { Router } from "express";
 import multer from "multer";
 import { idempotencyKeyGuard } from "../middleware/idempotencyMiddleware.js";
-import { uploadStatementHandler, listImportBatchesHandler } from "../controllers/importController.js";
+import { uploadStatementHandler, uploadInternalLedgerHandler, listImportBatchesHandler } from "../controllers/importController.js";
 import { authenticate, authorize } from "../middleware/auth.js";
 import { bulkImportLimiter } from "../middleware/rateLimiter.js";
 import { config } from "../config/env.js";
@@ -29,6 +29,14 @@ router.post(
   bulkImportLimiter,
   upload.single("file"),
   uploadStatementHandler
+);
+
+router.post(
+  "/ledger",
+  authorize("ADMIN"),
+  bulkImportLimiter,
+  upload.single("file"),
+  uploadInternalLedgerHandler
 );
 
 router.get(

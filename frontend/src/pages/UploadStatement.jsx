@@ -1,9 +1,12 @@
 import React, { useState } from "react";
 import { uploadFile } from "../api/client.js";
+import { useAuth } from "../api/AuthContext.jsx";
 
 export default function UploadStatement() {
+  const { user } = useAuth();
   const [file, setFile] = useState(null);
   const [sourceId, setSourceId] = useState("2"); // Default SWIFT_MT940
+  const [importType, setImportType] = useState("external");
   const [isDragOver, setIsDragOver] = useState(false);
   const [loading, setLoading] = useState(false);
   const [successMsg, setSuccessMsg] = useState(null);
@@ -43,7 +46,11 @@ export default function UploadStatement() {
     setGeneralError(null);
 
     try {
-      const res = await uploadFile("/imports/statements", file, { sourceId });
+      const res = await uploadFile(
+        importType === "internal" ? "/imports/ledger" : "/imports/statements",
+        file,
+        importType === "internal" ? {} : { sourceId }
+      );
       setSuccessMsg(res.message || "File uploaded and processed successfully.");
       setFile(null);
     } catch (err) {
@@ -59,9 +66,9 @@ export default function UploadStatement() {
 
   return (
     <div className="max-w-xl mx-auto p-6 bg-white rounded-lg border border-slate-200 shadow-sm mt-8">
-      <h2 className="text-xl font-semibold text-slate-800 mb-2">Upload Statement Feed</h2>
+      <h2 className="text-xl font-semibold text-slate-800 mb-2">Upload Data Feed</h2>
       <p className="text-sm text-slate-500 mb-6">
-        Ingest bank statements or credit card network feeds. Files are fully validated and imported atomically.
+        Ingest settlement statements or, for administrators, a new internal ledger batch. Files are validated and imported atomically.
       </p>
 
       {successMsg && (
@@ -89,16 +96,36 @@ export default function UploadStatement() {
 
       <form onSubmit={handleSubmit} className="space-y-6">
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-2">Import Source</label>
+          <label className="block text-sm font-medium text-slate-700 mb-2">Data Type</label>
           <select
-            value={sourceId}
-            onChange={(e) => setSourceId(e.target.value)}
+            value={importType}
+            onChange={(e) => setImportType(e.target.value)}
             className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
           >
-            <option value="2">SWIFT_MT940 (Source ID: 2)</option>
-            <option value="3">CARD_NETWORK (Source ID: 3)</option>
+            <option value="external">External settlement statement</option>
+            {user?.role === "ADMIN" && <option value="internal">Internal ledger (new batch)</option>}
           </select>
         </div>
+
+        {importType === "external" && (
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-2">Settlement Source</label>
+            <select
+              value={sourceId}
+              onChange={(e) => setSourceId(e.target.value)}
+              className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="2">SWIFT_MT940 (Source ID: 2)</option>
+              <option value="3">CARD_NETWORK (Source ID: 3)</option>
+            </select>
+          </div>
+        )}
+
+        {importType === "internal" && (
+          <p className="rounded-md bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800">
+            A ledger upload creates a new immutable internal batch. It does not overwrite previously reconciled ledger rows.
+          </p>
+        )}
 
         <div
           onDragOver={handleDragOver}
@@ -144,7 +171,7 @@ export default function UploadStatement() {
             disabled={!file || loading}
             className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-medium rounded-md text-sm transition"
           >
-            {loading ? "Processing Upload..." : "Import Statement"}
+            {loading ? "Processing Upload..." : importType === "internal" ? "Import Ledger Batch" : "Import Statement"}
           </button>
         </div>
       </form>

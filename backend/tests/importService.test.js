@@ -19,6 +19,7 @@ vi.mock("../src/config/db.js", () => {
 vi.mock("../src/repositories/importRepository.js", () => {
   return {
     createImportBatch: vi.fn(),
+    assertExternalImportSource: vi.fn(),
     createStagingTable: vi.fn(),
     validateStagingRecords: vi.fn().mockResolvedValue([]),
     insertFromStagingToMain: vi.fn(),

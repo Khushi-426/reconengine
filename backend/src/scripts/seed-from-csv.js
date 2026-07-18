@@ -67,17 +67,27 @@ async function run() {
     }
     console.log(`Seeded ${clientsToSeed.length} clients.`);
 
-    // 3. Seed accounts from account.csv
+    // 3. Seed accounts from account.csv. Berka links accounts to clients via
+    // disp.csv; account_id is not itself a client_id.
     console.log("Seeding accounts from account.csv...");
     const accountContent = fs.readFileSync(path.join(dataDir, "account.csv"), "utf8");
     const accountRecords = parse(accountContent, { delimiter: ";", columns: true, skip_empty_lines: true });
 
-    const accountMap = new Map(); // account_id -> account_id in DB
+    const dispContent = fs.readFileSync(path.join(dataDir, "disp.csv"), "utf8");
+    const dispositions = parse(dispContent, { delimiter: ";", columns: true, skip_empty_lines: true });
+    const accountOwnerMap = new Map();
+    for (const disposition of dispositions) {
+      if (disposition.type === "OWNER" && clientMap.has(parseInt(disposition.client_id, 10))) {
+        accountOwnerMap.set(parseInt(disposition.account_id, 10), parseInt(disposition.client_id, 10));
+      }
+    }
+
+    const accountMap = new Map(); // source account_id -> database account_id
     const accountRefMap = new Map(); // account_id -> external_ref
-    const accountsToSeed = accountRecords.filter(a => clientMap.has(parseInt(a.account_id, 10))).slice(0, 100);
+    const accountsToSeed = accountRecords.filter(a => accountOwnerMap.has(parseInt(a.account_id, 10))).slice(0, 100);
     for (const a of accountsToSeed) {
       const accId = parseInt(a.account_id, 10);
-      const dbClientId = clientMap.get(accId);
+      const dbClientId = clientMap.get(accountOwnerMap.get(accId));
       const extRef = `ACC-${accId}`;
       const districtId = parseInt(a.district_id, 10);
       const dbBranchId = branchMap.get(districtId) || branchMap.values().next().value;
@@ -172,6 +182,7 @@ async function run() {
 
   } catch (err) {
     console.error("Failed to seed from CSV:", err);
+    process.exitCode = 1;
   } finally {
     await client.end();
   }

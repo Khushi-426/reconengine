@@ -5,6 +5,11 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
+    "worker": "node src/worker-entry.js",
+    "migrate": "node src/scripts/migrate.js",
+    "seed:users": "node src/scripts/seed-users.js",
+    "seed:demo": "node src/scripts/seed-dev-transactions.js",
+    "seed:csv": "node src/scripts/seed-from-csv.js",
     "test": "node tests/run.js",
     "perf": "node tests/perf.js"
   },

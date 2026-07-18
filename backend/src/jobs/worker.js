@@ -92,9 +92,9 @@ export class JobWorker {
 
     try {
       if (job.job_type === "RECONCILIATION_RUN") {
-        const { runDate, triggeredBy } = job.payload;
+        const { runDate, triggeredBy, batchId } = job.payload;
         if (!runDate) throw new Error("Reconciliation runDate is required in job payload");
-        await runReconciliation({ runDate, triggeredBy });
+        await runReconciliation({ runDate, batchId, triggeredBy });
       } else if (job.job_type === "REFRESH_DAILY_SUMMARY") {
         logger.info("Refreshing daily reconciliation summary materialized view...");
         await query("SELECT fn_refresh_daily_summary()");

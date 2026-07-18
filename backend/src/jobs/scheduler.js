@@ -1,6 +1,7 @@
 import cron from "node-cron";
 import { findActiveSchedulerConfigs } from "../repositories/jobsRepository.js";
 import { queueJob } from "../services/jobsService.js";
+import { getAvailableExternalSettlementBatch } from "../services/matchingService.js";
 import { logger } from "../config/logger.js";
 
 export class JobScheduler {
@@ -26,6 +27,16 @@ export class JobScheduler {
             if (job_type === "RECONCILIATION_RUN") {
               if (!resolvedPayload.runDate || resolvedPayload.runDate === "$TODAY") {
                 resolvedPayload.runDate = new Date().toISOString().slice(0, 10);
+              }
+              try {
+                const batch = await getAvailableExternalSettlementBatch();
+                resolvedPayload.batchId = batch.batch_id;
+              } catch (err) {
+                if (err.code === "NO_EXTERNAL_SETTLEMENT_BATCH") {
+                  logger.info({ schedulerName: name }, "Skipping scheduled reconciliation: no external settlement batch is available");
+                  return;
+                }
+                throw err;
               }
             }
 

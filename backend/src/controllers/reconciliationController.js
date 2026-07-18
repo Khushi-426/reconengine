@@ -5,9 +5,12 @@ export async function triggerRunHandler(req, res, next) {
   try {
     const { runDate } = req.body;
     const targetDate = runDate || new Date().toISOString().slice(0, 10);
+    // Validate before queueing so callers get an actionable response instead
+    // of a background-job retry/DLQ cycle when no statement has been imported.
+    const batch = await matchingService.getAvailableExternalSettlementBatch();
     const job = await jobsService.queueJob({
       jobType: "RECONCILIATION_RUN",
-      payload: { runDate: targetDate, triggeredBy: req.user.userId },
+      payload: { runDate: targetDate, batchId: batch.batch_id, triggeredBy: req.user.userId },
       priority: 20,
       userId: req.user.userId,
       userRole: req.user.role,

@@ -9,6 +9,7 @@ import {
   generateExceptionsForUnmatched,
   completeRun,
   findReconciliationRuns,
+  requireExternalSettlementBatch,
 } from "../repositories/matchingRepository.js";
 
 /**
@@ -18,21 +19,27 @@ import {
  * BOTH — a reconciliation run is either fully applied or not applied at all,
  * never left half-matched (which would corrupt exception counts and audit trail).
  */
-export async function runReconciliation({ runDate, triggeredBy }) {
+export async function getAvailableExternalSettlementBatch(batchId) {
+  return requireExternalSettlementBatch(batchId);
+}
+
+export async function runReconciliation({ runDate, triggeredBy, batchId }) {
   const stats = { totalInternal: 0, totalExternal: 0, matchedCount: 0, exceptionCount: 0 };
+  const batch = await requireExternalSettlementBatch(batchId);
 
   const runId = await withTransaction(async (client) => {
     const runId = await createRun(client, { runDate, triggeredBy });
 
     const totals = await client.query(
-      `SELECT (SELECT COUNT(*) FROM ledger_transactions) AS internal_count,
-              (SELECT COUNT(*) FROM external_statement_lines) AS external_count`
+      `SELECT (SELECT COUNT(*) FROM ledger_transactions WHERE value_date = $1) AS internal_count,
+              (SELECT COUNT(*) FROM external_statement_lines WHERE batch_id = $2 AND value_date = $1) AS external_count`,
+      [runDate, batch.batch_id]
     );
     stats.totalInternal = parseInt(totals.rows[0].internal_count, 10);
     stats.totalExternal = parseInt(totals.rows[0].external_count, 10);
 
     // Pass 1: exact matches
-    const exactMatches = await findExactMatches(client);
+    const exactMatches = await findExactMatches(client, { batchId: batch.batch_id, runDate });
     for (const m of exactMatches) {
       await insertMatchGroup(client, {
         runId,
@@ -48,7 +55,7 @@ export async function runReconciliation({ runDate, triggeredBy }) {
     logger.info({ runId, count: exactMatches.length }, "Exact match pass complete");
 
     // Pass 2: tolerance matches (FX rounding, fee deltas)
-    const toleranceMatches = await findToleranceMatches(client);
+    const toleranceMatches = await findToleranceMatches(client, { batchId: batch.batch_id, runDate });
     for (const m of toleranceMatches) {
       const confidence = 100 - Math.min(20, Number(m.amount_diff) * 100); // rough confidence heuristic
       await insertMatchGroup(client, {
@@ -65,7 +72,7 @@ export async function runReconciliation({ runDate, triggeredBy }) {
     logger.info({ runId, count: toleranceMatches.length }, "Tolerance match pass complete");
 
     // Pass 3: batch-settlement matches (many ledger rows -> 1 external line)
-    const batchCandidates = await findBatchSettlementCandidates(client);
+    const batchCandidates = await findBatchSettlementCandidates(client, { batchId: batch.batch_id, runDate });
     const groups = {};
     for (const row of batchCandidates) {
       if (!groups[row.ext_line_id]) {
@@ -121,7 +128,7 @@ export async function runReconciliation({ runDate, triggeredBy }) {
     logger.info({ runId, count: matchedLedgerIds.size }, "Batch settlement match pass complete");
 
     // Pass 4: everything unmatched becomes an exception
-    const exceptionCount = await generateExceptionsForUnmatched(client, runId);
+    const exceptionCount = await generateExceptionsForUnmatched(client, runId, { batchId: batch.batch_id, runDate });
     stats.exceptionCount = exceptionCount;
 
     await completeRun(client, runId, stats);
@@ -137,7 +144,7 @@ export async function runReconciliation({ runDate, triggeredBy }) {
     logger.warn({ err }, "Materialized view refresh failed — will retry on next scheduled refresh");
   }
 
-  return { runId, stats };
+  return { runId, batchId: batch.batch_id, stats };
 }
 
 export async function listReconciliationRuns(filters) {

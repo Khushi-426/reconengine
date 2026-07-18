@@ -44,6 +44,7 @@ async function run() {
     console.log("All migrations applied successfully!");
   } catch (err) {
     console.error("Migration failed:", err);
+    process.exitCode = 1;
   } finally {
     await client.end();
   }

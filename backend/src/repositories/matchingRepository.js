@@ -4,6 +4,53 @@
  * failure at any stage rolls back the entire reconciliation run cleanly.
  */
 import { query } from "../config/db.js";
+import { AppError } from "../utils/AppError.js";
+
+/**
+ * Returns the newest completed, non-ledger import that actually contains
+ * statement lines. A reconciliation run must always be tied to this batch;
+ * importing a file is the only supported way external settlement data enters
+ * the application.
+ */
+export async function findLatestExternalSettlementBatch() {
+  const result = await query(`
+    SELECT ib.batch_id, ib.source_id, ib.file_name, ib.completed_at
+    FROM import_batches ib
+    JOIN import_sources src ON src.source_id = ib.source_id
+    WHERE ib.status = 'COMPLETED'
+      AND src.file_format <> 'DATABASE'
+      AND EXISTS (
+        SELECT 1 FROM external_statement_lines ex WHERE ex.batch_id = ib.batch_id
+      )
+    ORDER BY ib.completed_at DESC NULLS LAST, ib.batch_id DESC
+    LIMIT 1
+  `);
+  return result.rows[0] || null;
+}
+
+export async function requireExternalSettlementBatch(batchId) {
+  if (batchId) {
+    const result = await query(`
+      SELECT ib.batch_id, ib.source_id, ib.file_name, ib.completed_at
+      FROM import_batches ib
+      JOIN import_sources src ON src.source_id = ib.source_id
+      WHERE ib.batch_id = $1
+        AND ib.status = 'COMPLETED'
+        AND src.file_format <> 'DATABASE'
+        AND EXISTS (SELECT 1 FROM external_statement_lines ex WHERE ex.batch_id = ib.batch_id)
+    `, [batchId]);
+    if (result.rowCount > 0) return result.rows[0];
+  } else {
+    const batch = await findLatestExternalSettlementBatch();
+    if (batch) return batch;
+  }
+
+  throw new AppError(
+    409,
+    "No external settlement batch available for reconciliation.",
+    "NO_EXTERNAL_SETTLEMENT_BATCH"
+  );
+}
 
 export async function createRun(client, { runDate, triggeredBy }) {
   const result = await client.query(
@@ -13,7 +60,7 @@ export async function createRun(client, { runDate, triggeredBy }) {
   return result.rows[0].run_id;
 }
 
-export async function findExactMatches(client) {
+export async function findExactMatches(client, { batchId, runDate }) {
   const sql = `
     WITH candidate_pairs AS (
       SELECT
@@ -25,18 +72,20 @@ export async function findExactMatches(client) {
       JOIN external_statement_lines ex
         ON ex.account_ref = a.external_ref
        AND ex.currency = lt.currency
+       AND ex.batch_id = $1
        AND ex.value_date BETWEEN lt.value_date - INTERVAL '2 days' AND lt.value_date + INTERVAL '2 days'
-      WHERE lt.amount = ex.amount
+      WHERE lt.value_date = $2
+        AND lt.amount = ex.amount
         AND lt.ledger_txn_id NOT IN (SELECT ledger_txn_id FROM match_group_ledger_lines)
         AND ex.ext_line_id NOT IN (SELECT ext_line_id FROM match_group_external_lines)
     )
     SELECT ledger_txn_id, ext_line_id FROM candidate_pairs WHERE ledger_rank = 1 AND ext_rank = 1;
   `;
-  const result = await client.query(sql);
+  const result = await client.query(sql, [batchId, runDate]);
   return result.rows;
 }
 
-export async function findToleranceMatches(client) {
+export async function findToleranceMatches(client, { batchId, runDate }) {
   const sql = `
     WITH active_rule AS (
       SELECT amount_tolerance, date_window_days FROM match_rules
@@ -49,9 +98,10 @@ export async function findToleranceMatches(client) {
         ROW_NUMBER() OVER (PARTITION BY ex.ext_line_id ORDER BY ABS(lt.amount - ex.amount)) AS ext_rank
       FROM ledger_transactions lt
       JOIN accounts a ON a.account_id = lt.account_id
-      JOIN external_statement_lines ex ON ex.account_ref = a.external_ref AND ex.currency = lt.currency
+      JOIN external_statement_lines ex ON ex.account_ref = a.external_ref AND ex.currency = lt.currency AND ex.batch_id = $1
       CROSS JOIN active_rule r
-      WHERE ex.value_date BETWEEN lt.value_date - (r.date_window_days || ' days')::INTERVAL
+      WHERE lt.value_date = $2
+        AND ex.value_date BETWEEN lt.value_date - (r.date_window_days || ' days')::INTERVAL
                                AND lt.value_date + (r.date_window_days || ' days')::INTERVAL
         AND ABS(lt.amount - ex.amount) <= (lt.amount * r.amount_tolerance)
         AND lt.ledger_txn_id NOT IN (SELECT ledger_txn_id FROM match_group_ledger_lines)
@@ -59,11 +109,11 @@ export async function findToleranceMatches(client) {
     )
     SELECT ledger_txn_id, ext_line_id, amount_diff FROM candidate_pairs WHERE ledger_rank = 1 AND ext_rank = 1;
   `;
-  const result = await client.query(sql);
+  const result = await client.query(sql, [batchId, runDate]);
   return result.rows;
 }
 
-export async function findBatchSettlementCandidates(client) {
+export async function findBatchSettlementCandidates(client, { batchId, runDate }) {
   const sql = `
     WITH unmatched_ledger AS (
       SELECT
@@ -78,12 +128,14 @@ export async function findBatchSettlementCandidates(client) {
         ) AS running_total
       FROM ledger_transactions lt
       JOIN accounts a ON a.account_id = lt.account_id
-      WHERE lt.ledger_txn_id NOT IN (SELECT ledger_txn_id FROM match_group_ledger_lines)
+      WHERE lt.value_date = $2
+        AND lt.ledger_txn_id NOT IN (SELECT ledger_txn_id FROM match_group_ledger_lines)
     ),
     batch_candidates AS (
       SELECT ex.ext_line_id, ex.account_ref, ex.amount AS batch_total, ex.value_date
       FROM external_statement_lines ex
-      WHERE ex.is_batched_settlement = TRUE
+      WHERE ex.batch_id = $1
+        AND ex.is_batched_settlement = TRUE
         AND ex.ext_line_id NOT IN (SELECT ext_line_id FROM match_group_external_lines)
     )
     SELECT
@@ -98,7 +150,7 @@ export async function findBatchSettlementCandidates(client) {
     WHERE ul.running_total <= bc.batch_total
     ORDER BY bc.ext_line_id, ul.value_date
   `;
-  const result = await client.query(sql);
+  const result = await client.query(sql, [batchId, runDate]);
   return result.rows;
 }
 
@@ -130,25 +182,28 @@ export async function insertMatchGroup(client, { runId, ruleId, matchType, confi
  * Uses NOT EXISTS anti-joins (generally faster than NOT IN for large sets
  * since NOT IN has null-handling pitfalls and poor plan choices at scale).
  */
-export async function generateExceptionsForUnmatched(client, runId) {
+export async function generateExceptionsForUnmatched(client, runId, { batchId, runDate }) {
   const missingExternal = await client.query(
     `INSERT INTO reconciliation_exceptions (run_id, ledger_txn_id, exception_type)
      SELECT $1, lt.ledger_txn_id, 'MISSING_EXTERNAL'
      FROM ledger_transactions lt
-     WHERE NOT EXISTS (SELECT 1 FROM match_group_ledger_lines mgl WHERE mgl.ledger_txn_id = lt.ledger_txn_id)
+     WHERE lt.value_date = $2
+       AND NOT EXISTS (SELECT 1 FROM match_group_ledger_lines mgl WHERE mgl.ledger_txn_id = lt.ledger_txn_id)
        AND NOT EXISTS (SELECT 1 FROM reconciliation_exceptions e WHERE e.ledger_txn_id = lt.ledger_txn_id)
      RETURNING exception_id`,
-    [runId]
+    [runId, runDate]
   );
 
   const missingInternal = await client.query(
     `INSERT INTO reconciliation_exceptions (run_id, ext_line_id, exception_type)
      SELECT $1, ex.ext_line_id, 'MISSING_INTERNAL'
      FROM external_statement_lines ex
-     WHERE NOT EXISTS (SELECT 1 FROM match_group_external_lines mgl WHERE mgl.ext_line_id = ex.ext_line_id)
+     WHERE ex.batch_id = $2
+       AND ex.value_date = $3
+       AND NOT EXISTS (SELECT 1 FROM match_group_external_lines mgl WHERE mgl.ext_line_id = ex.ext_line_id)
        AND NOT EXISTS (SELECT 1 FROM reconciliation_exceptions e WHERE e.ext_line_id = ex.ext_line_id)
      RETURNING exception_id`,
-    [runId]
+    [runId, batchId, runDate]
   );
 
   return missingExternal.rowCount + missingInternal.rowCount;

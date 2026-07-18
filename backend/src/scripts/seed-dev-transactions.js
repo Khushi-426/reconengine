@@ -37,11 +37,11 @@ async function run() {
 
     // 3. Insert Account
     const accountRes = await client.query(
-      `INSERT INTO accounts (client_id, account_number, account_type, currency, external_ref)
-       VALUES ($1, '12345678', 'CURRENT', 'GBP', 'ACC-TEST')
-       ON CONFLICT (external_ref) DO UPDATE SET account_number = EXCLUDED.account_number
+      `INSERT INTO accounts (client_id, branch_id, account_type, currency, external_ref)
+       VALUES ($1, $2, 'CURRENT', 'GBP', 'ACC-TEST')
+       ON CONFLICT (external_ref) DO UPDATE SET client_id = EXCLUDED.client_id, branch_id = EXCLUDED.branch_id
        RETURNING account_id`,
-      [clientId]
+      [clientId, branchId]
     );
     const accountId = accountRes.rows[0].account_id;
 
@@ -85,6 +85,7 @@ EXT-TXN-5,ACC-TEST,75.00,GBP,2026-07-18,2026-07-18`);
 
   } catch (err) {
     console.error("Failed to seed demo transactions:", err);
+    process.exitCode = 1;
   } finally {
     await client.end();
   }

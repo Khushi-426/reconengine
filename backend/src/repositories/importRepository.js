@@ -3,6 +3,16 @@ import { query } from "../config/db.js";
 
 const BATCH_INSERT_CHUNK_SIZE = 1000;
 
+export async function assertExternalImportSource(client, sourceId) {
+  const result = await client.query(
+    `SELECT source_id FROM import_sources WHERE source_id = $1 AND file_format <> 'DATABASE'`,
+    [sourceId]
+  );
+  if (result.rowCount === 0) {
+    throw new AppError(422, "sourceId must identify an external settlement source", "INVALID_IMPORT_SOURCE");
+  }
+}
+
 /**
  * Registers an import batch. Relies on the UNIQUE (source_id, file_hash)
  * constraint in the schema to make re-uploading the exact same file a no-op
@@ -69,7 +79,7 @@ export async function bulkInsertExternalLines(client, batchId, sourceId, rows) {
     const values = [];
     const placeholders = chunk
       .map((row, idx) => {
-        const base = idx * 8;
+        const base = idx * 9;
         values.push(
           batchId,
           sourceId,
@@ -78,15 +88,16 @@ export async function bulkInsertExternalLines(client, batchId, sourceId, rows) {
           row.amount,
           row.currency,
           row.valueDate,
+          row.settlementDate || null,
           row.isBatchedSettlement || false
         );
-        return `($${base + 1},$${base + 2},$${base + 3},$${base + 4},$${base + 5},$${base + 6},$${base + 7},$${base + 8})`;
+        return `($${base + 1},$${base + 2},$${base + 3},$${base + 4},$${base + 5},$${base + 6},$${base + 7},$${base + 8},$${base + 9})`;
       })
       .join(",");
 
     await client.query(
       `INSERT INTO external_statement_lines
-         (batch_id, source_id, external_ref, account_ref, amount, currency, value_date, is_batched_settlement)
+         (batch_id, source_id, external_ref, account_ref, amount, currency, value_date, settlement_date, is_batched_settlement)
        VALUES ${placeholders}`,
       values
     );
@@ -106,6 +117,7 @@ export async function createStagingTable(client) {
       amount                NUMERIC(15,2),
       currency              VARCHAR(3),
       value_date            DATE,
+      settlement_date       DATE,
       is_batched_settlement BOOLEAN
     ) ON COMMIT DROP
   `);
@@ -182,12 +194,80 @@ export async function validateStagingRecords(client) {
  */
 export async function insertFromStagingToMain(client, batchId, sourceId) {
   const insertSql = `
-    INSERT INTO external_statement_lines (batch_id, source_id, external_ref, account_ref, amount, currency, value_date, is_batched_settlement)
-    SELECT $1, $2, s.external_ref, s.account_ref, s.amount, UPPER(s.currency), s.value_date, COALESCE(s.is_batched_settlement, false)
+    INSERT INTO external_statement_lines (batch_id, source_id, external_ref, account_ref, amount, currency, value_date, settlement_date, is_batched_settlement)
+    SELECT $1, $2, s.external_ref, s.account_ref, s.amount, UPPER(s.currency), s.value_date, s.settlement_date, COALESCE(s.is_batched_settlement, false)
     FROM staging_statement_lines s
     RETURNING ext_line_id
   `;
   const result = await client.query(insertSql, [batchId, sourceId]);
+  return result.rowCount;
+}
+
+export async function createLedgerStagingTable(client) {
+  await client.query(`
+    CREATE TEMP TABLE staging_ledger_transactions (
+      txn_ref      VARCHAR(64),
+      account_ref  VARCHAR(50),
+      txn_type     VARCHAR(20),
+      amount       NUMERIC(18,2),
+      currency     VARCHAR(3),
+      value_date   DATE,
+      counterparty VARCHAR(150),
+      narrative    TEXT
+    ) ON COMMIT DROP
+  `);
+}
+
+export async function validateLedgerStagingRecords(client) {
+  const errors = [];
+  const required = await client.query(`
+    SELECT COUNT(*) AS cnt FROM staging_ledger_transactions
+    WHERE txn_ref IS NULL OR account_ref IS NULL OR txn_type IS NULL
+       OR amount IS NULL OR currency IS NULL OR value_date IS NULL
+  `);
+  if (Number(required.rows[0].cnt) > 0) errors.push("Missing required ledger fields on some rows");
+
+  const typeCheck = await client.query(`
+    SELECT COUNT(*) AS cnt FROM staging_ledger_transactions
+    WHERE txn_type NOT IN ('CREDIT', 'DEBIT', 'FEE', 'TAX', 'REVERSAL')
+  `);
+  if (Number(typeCheck.rows[0].cnt) > 0) errors.push("txn_type must be CREDIT, DEBIT, FEE, TAX, or REVERSAL");
+
+  const amountCheck = await client.query("SELECT COUNT(*) AS cnt FROM staging_ledger_transactions WHERE amount <= 0");
+  if (Number(amountCheck.rows[0].cnt) > 0) errors.push("Ledger amount must be a positive number on all rows");
+
+  const accountCheck = await client.query(`
+    SELECT DISTINCT s.account_ref FROM staging_ledger_transactions s
+    LEFT JOIN accounts a ON a.external_ref = s.account_ref
+    WHERE a.account_id IS NULL LIMIT 10
+  `);
+  if (accountCheck.rowCount > 0) errors.push(`Account reference(s) not found in system: ${accountCheck.rows.map((r) => `'${r.account_ref}'`).join(", ")}`);
+
+  const duplicateCheck = await client.query(`
+    SELECT txn_ref FROM staging_ledger_transactions GROUP BY txn_ref HAVING COUNT(*) > 1 LIMIT 5
+  `);
+  if (duplicateCheck.rowCount > 0) errors.push(`Duplicate transaction reference(s) in file: ${duplicateCheck.rows.map((r) => `'${r.txn_ref}'`).join(", ")}`);
+
+  const existingCheck = await client.query(`
+    SELECT DISTINCT s.txn_ref FROM staging_ledger_transactions s
+    JOIN ledger_transactions lt ON lt.txn_ref = s.txn_ref
+    LIMIT 5
+  `);
+  if (existingCheck.rowCount > 0) errors.push(`Transaction reference(s) already exist: ${existingCheck.rows.map((r) => `'${r.txn_ref}'`).join(", ")}`);
+
+  return errors;
+}
+
+export async function insertLedgerFromStaging(client, batchId) {
+  const result = await client.query(`
+    INSERT INTO ledger_transactions
+      (account_id, txn_ref, txn_type, amount, currency, value_date, counterparty, narrative, batch_id)
+    SELECT a.account_id, s.txn_ref, s.txn_type, s.amount, UPPER(s.currency), s.value_date,
+           NULLIF(s.counterparty, ''), NULLIF(s.narrative, ''), $1
+    FROM staging_ledger_transactions s
+    JOIN accounts a ON a.external_ref = s.account_ref
+    RETURNING ledger_txn_id
+  `, [batchId]);
   return result.rowCount;
 }
 
