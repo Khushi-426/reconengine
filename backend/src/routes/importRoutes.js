@@ -21,13 +21,13 @@ const upload = multer({
 const router = Router();
 
 router.use(authenticate);
-router.use(idempotencyKeyGuard);
 
 router.post(
   "/statements",
   authorize("ANALYST", "APPROVER", "ADMIN"),
   bulkImportLimiter,
   upload.single("file"),
+  idempotencyKeyGuard,
   uploadStatementHandler
 );
 
@@ -36,6 +36,7 @@ router.post(
   authorize("ADMIN"),
   bulkImportLimiter,
   upload.single("file"),
+  idempotencyKeyGuard,
   uploadInternalLedgerHandler
 );
 

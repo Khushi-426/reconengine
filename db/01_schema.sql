@@ -172,6 +172,7 @@ CREATE TABLE match_rules (
 CREATE TABLE reconciliation_runs (
     run_id          BIGSERIAL PRIMARY KEY,
     run_date        DATE NOT NULL,
+    source_batch_id BIGINT NOT NULL REFERENCES import_batches(batch_id),
     triggered_by    UUID REFERENCES users(user_id),
     status          VARCHAR(20) NOT NULL DEFAULT 'RUNNING'
                         CHECK (status IN ('RUNNING','COMPLETED','FAILED')),
@@ -182,6 +183,9 @@ CREATE TABLE reconciliation_runs (
     started_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     completed_at    TIMESTAMPTZ
 );
+CREATE UNIQUE INDEX uq_reconciliation_runs_batch_date_final
+    ON reconciliation_runs(run_date, source_batch_id)
+    WHERE status IN ('RUNNING', 'COMPLETED');
 
 -- Many-to-many bridge: one match can link many ledger txns to many external lines
 -- (handles batched settlements and split fees correctly — this is the key modelling decision)

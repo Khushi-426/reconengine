@@ -132,4 +132,29 @@ describe("matchingService integration", () => {
     const ledgerLines = await testPool.query("SELECT * FROM match_group_ledger_lines WHERE match_id = $1", [matchId]);
     expect(ledgerLines.rowCount).toBe(3); // 3 ledger lines linked!
   });
+
+  it("rejects rerunning the same completed batch/date combination", async () => {
+    await testPool.query(
+      `INSERT INTO ledger_transactions (account_id, txn_ref, txn_type, amount, currency, value_date)
+       VALUES ($1, 'LDG-RERUN-1', 'CREDIT', 100.00, 'GBP', '2026-07-18')`,
+      [accountId]
+    );
+    await testPool.query(
+      `INSERT INTO external_statement_lines (batch_id, source_id, external_ref, account_ref, amount, currency, value_date, is_batched_settlement)
+       VALUES ((SELECT MAX(batch_id) FROM import_batches), 2, 'EXT-RERUN-1', $1, 100.00, 'GBP', '2026-07-18', FALSE)`,
+      [accountRef]
+    );
+
+    await runReconciliation({
+      runDate: "2026-07-18",
+      triggeredBy: userId,
+    });
+
+    await expect(
+      runReconciliation({
+        runDate: "2026-07-18",
+        triggeredBy: userId,
+      })
+    ).rejects.toMatchObject({ code: "RECONCILIATION_ALREADY_EXISTS", statusCode: 409 });
+  });
 });

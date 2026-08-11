@@ -11,8 +11,35 @@ export async function enqueueJob(client, { jobType, payload = {}, priority = 20,
     VALUES ($1, 'PENDING', $2, $3, $4, $5)
     RETURNING job_id, job_type, status, priority, attempts, max_attempts, run_at, created_at
   `;
-  const result = await db.query(sql, [jobType, JSON.stringify(payload), priority, maxAttempts, runAt]);
-  return result.rows[0];
+  try {
+    const result = await db.query(sql, [jobType, JSON.stringify(payload), priority, maxAttempts, runAt]);
+    return result.rows[0];
+  } catch (err) {
+    if (err.code === "23505" && err.constraint === "uq_recon_jobs_active") {
+      throw new AppError(
+        409,
+        `A reconciliation job is already queued for ${payload.runDate} and batch #${payload.batchId}.`,
+        "RECONCILIATION_JOB_ALREADY_QUEUED"
+      );
+    }
+    throw err;
+  }
+}
+
+export async function findActiveReconciliationJob(client, { runDate, batchId }) {
+  const db = client || pool;
+  const result = await db.query(
+    `SELECT job_id, status
+     FROM background_jobs
+     WHERE job_type = 'RECONCILIATION_RUN'
+       AND status IN ('PENDING', 'RUNNING', 'RETRYING')
+       AND payload->>'runDate' = $1
+       AND (payload->>'batchId')::BIGINT = $2
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [runDate, batchId]
+  );
+  return result.rows[0] || null;
 }
 
 /**

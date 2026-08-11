@@ -52,12 +52,45 @@ export async function requireExternalSettlementBatch(batchId) {
   );
 }
 
-export async function createRun(client, { runDate, triggeredBy }) {
+export async function assertNoCompletedRunForBatch(client, { runDate, batchId }) {
   const result = await client.query(
-    `INSERT INTO reconciliation_runs (run_date, triggered_by) VALUES ($1,$2) RETURNING run_id`,
-    [runDate, triggeredBy]
+    `SELECT run_id
+     FROM reconciliation_runs
+     WHERE run_date = $1
+       AND source_batch_id = $2
+       AND status IN ('RUNNING', 'COMPLETED')
+     LIMIT 1`,
+    [runDate, batchId]
   );
-  return result.rows[0].run_id;
+
+  if (result.rowCount > 0) {
+    throw new AppError(
+      409,
+      `A reconciliation run already exists for ${runDate} and batch #${batchId}.`,
+      "RECONCILIATION_ALREADY_EXISTS"
+    );
+  }
+}
+
+export async function createRun(client, { runDate, triggeredBy, batchId }) {
+  try {
+    const result = await client.query(
+      `INSERT INTO reconciliation_runs (run_date, source_batch_id, triggered_by)
+       VALUES ($1,$2,$3)
+       RETURNING run_id`,
+      [runDate, batchId, triggeredBy]
+    );
+    return result.rows[0].run_id;
+  } catch (err) {
+    if (err.code === "23505" && err.constraint === "uq_reconciliation_runs_batch_date_final") {
+      throw new AppError(
+        409,
+        `A reconciliation run already exists for ${runDate} and batch #${batchId}.`,
+        "RECONCILIATION_ALREADY_EXISTS"
+      );
+    }
+    throw err;
+  }
 }
 
 export async function findExactMatches(client, { batchId, runDate }) {
@@ -225,6 +258,7 @@ export async function findReconciliationRuns({ page = 1, pageSize = 20 } = {}) {
     SELECT
       r.run_id,
       r.run_date,
+      r.source_batch_id,
       r.triggered_by,
       r.status,
       r.total_internal,

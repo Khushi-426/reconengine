@@ -31,6 +31,11 @@ CREATE INDEX idx_jobs_running_heartbeat
     ON background_jobs(last_heartbeat) 
     WHERE status = 'RUNNING';
 
+CREATE UNIQUE INDEX uq_recon_jobs_active
+    ON background_jobs (((payload->>'runDate')), (((payload->>'batchId')::BIGINT)))
+    WHERE job_type = 'RECONCILIATION_RUN'
+      AND status IN ('PENDING', 'RUNNING', 'RETRYING');
+
 CREATE TABLE dead_letter_jobs (
     job_id         BIGINT PRIMARY KEY,
     job_type       VARCHAR(50) NOT NULL,

@@ -1,25 +1,8 @@
 import pg from "pg";
-import fs from "fs";
-import path from "path";
-import { fileURLToPath } from "url";
 import dotenv from "dotenv";
+import { applyMigrations } from "./migrationRunner.js";
 
 dotenv.config();
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-const sqlFiles = [
-  "../../../db/01_schema.sql",
-  "../../../db/02_triggers.sql",
-  "../../../db/03_views.sql",
-  "../../../db/04_matching_engine.sql",
-  "../../../db/05_security_grants.sql",
-  "../../../db/06_jobs.sql",
-  "../../../db/07_exceptions_workflow.sql",
-  "../../../db/08_notifications.sql",
-  "../../../db/09_partitioning_and_tuning.sql",
-  "../../../db/10_security_improvements.sql",
-];
 
 async function run() {
   const client = new pg.Client({
@@ -33,13 +16,7 @@ async function run() {
   try {
     await client.connect();
     console.log("Connected to dev database. Applying migrations...");
-
-    for (const file of sqlFiles) {
-      const filePath = path.resolve(__dirname, file);
-      console.log(`Applying ${path.basename(filePath)}...`);
-      const sqlContent = fs.readFileSync(filePath, "utf8");
-      await client.query(sqlContent);
-    }
+    await applyMigrations(client);
 
     console.log("All migrations applied successfully!");
   } catch (err) {

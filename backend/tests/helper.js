@@ -13,6 +13,9 @@ export const testPool = new pg.Pool(testDbConfig);
 
 export async function cleanDb() {
   const tables = [
+    "idempotency_keys",
+    "dead_letter_jobs",
+    "background_jobs",
     "report_snapshots",
     "daily_close_signoffs",
     "sla_definitions",

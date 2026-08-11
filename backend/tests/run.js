@@ -1,8 +1,8 @@
 import { execSync } from "child_process";
-import fs from "fs";
-import path from "path";
 import pg from "pg";
+import path from "path";
 import { fileURLToPath } from "url";
+import { applyMigrations } from "../src/scripts/migrationRunner.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -39,29 +39,7 @@ async function waitAndMigrate() {
   await client.connect();
 
   console.log("Connected. Applying migrations...");
-  const sqlFiles = [
-    "../../db/01_schema.sql",
-    "../../db/02_triggers.sql",
-    "../../db/03_views.sql",
-    "../../db/04_matching_engine.sql",
-    "../../db/05_security_grants.sql",
-    "../../db/06_jobs.sql",
-    "../../db/07_exceptions_workflow.sql",
-    "../../db/08_notifications.sql",
-    "../../db/09_partitioning_and_tuning.sql",
-    "../../db/10_security_improvements.sql",
-  ];
-
-  for (const file of sqlFiles) {
-    const filePath = path.join(__dirname, file);
-    console.log(`Running ${path.basename(filePath)}...`);
-    let sqlContent = fs.readFileSync(filePath, "utf8");
-
-    // Replace the database name in connection grants if needed
-    sqlContent = sqlContent.replace(/DATABASE\s+reconengine\b/gi, "DATABASE reconengine_test");
-
-    await client.query(sqlContent);
-  }
+  await applyMigrations(client, { databaseNameOverride: "reconengine_test" });
 
   await client.end();
   console.log("Migrations applied successfully!");

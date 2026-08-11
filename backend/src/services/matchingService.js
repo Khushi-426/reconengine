@@ -2,6 +2,7 @@ import { withTransaction, query } from "../config/db.js";
 import { logger } from "../config/logger.js";
 import {
   createRun,
+  assertNoCompletedRunForBatch,
   findExactMatches,
   findToleranceMatches,
   findBatchSettlementCandidates,
@@ -28,7 +29,8 @@ export async function runReconciliation({ runDate, triggeredBy, batchId }) {
   const batch = await requireExternalSettlementBatch(batchId);
 
   const runId = await withTransaction(async (client) => {
-    const runId = await createRun(client, { runDate, triggeredBy });
+    await assertNoCompletedRunForBatch(client, { runDate, batchId: batch.batch_id });
+    const runId = await createRun(client, { runDate, triggeredBy, batchId: batch.batch_id });
 
     const totals = await client.query(
       `SELECT (SELECT COUNT(*) FROM ledger_transactions WHERE value_date = $1) AS internal_count,

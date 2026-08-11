@@ -90,6 +90,56 @@ describe("ReconEngine integration flow", () => {
     await worker.executeJob(claimed);
   });
 
+  it("4b. rejects duplicate reconciliation queueing for the same date and batch", async () => {
+    const res = await request(app)
+      .post("/api/recon/runs")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ runDate: "2026-07-18" });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe("RECONCILIATION_ALREADY_EXISTS");
+  });
+
+  it("4c. replays completed imports for the same idempotency key and rejects payload mismatch", async () => {
+    const firstCsv =
+      "external_ref,account_ref,amount,currency,value_date,is_batched_settlement\n" +
+      "EXT-IDEM-1,ACC-TEST,175.00,GBP,2026-07-19,false\n";
+
+    const first = await request(app)
+      .post("/api/imports/statements")
+      .set("Authorization", `Bearer ${token}`)
+      .set("Idempotency-Key", "upload-statement-1")
+      .field("sourceId", "2")
+      .attach("file", Buffer.from(firstCsv), "statement-idem.csv");
+
+    expect(first.status).toBe(201);
+
+    const replay = await request(app)
+      .post("/api/imports/statements")
+      .set("Authorization", `Bearer ${token}`)
+      .set("Idempotency-Key", "upload-statement-1")
+      .field("sourceId", "2")
+      .attach("file", Buffer.from(firstCsv), "statement-idem.csv");
+
+    expect(replay.status).toBe(201);
+    expect(replay.headers["x-cache-idempotency"]).toBe("true");
+    expect(replay.body.batchId).toBe(first.body.batchId);
+
+    const secondCsv =
+      "external_ref,account_ref,amount,currency,value_date,is_batched_settlement\n" +
+      "EXT-IDEM-2,ACC-TEST,176.00,GBP,2026-07-19,false\n";
+
+    const mismatch = await request(app)
+      .post("/api/imports/statements")
+      .set("Authorization", `Bearer ${token}`)
+      .set("Idempotency-Key", "upload-statement-1")
+      .field("sourceId", "2")
+      .attach("file", Buffer.from(secondCsv), "statement-idem-2.csv");
+
+    expect(mismatch.status).toBe(409);
+    expect(mismatch.body.error.code).toBe("IDEMPOTENCY_PAYLOAD_MISMATCH");
+  });
+
   it("5. processes exception through assignment, start work, resolve, approve, and close workflow", async () => {
     // 1. List exceptions in UNASSIGNED state
     const listRes = await request(app)

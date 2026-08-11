@@ -1,11 +1,13 @@
 import { vi, describe, it, expect, beforeEach } from "vitest";
 import { idempotencyKeyGuard } from "../src/middleware/idempotencyMiddleware.js";
 import { AppError } from "../src/utils/AppError.js";
-import * as db from "../src/config/db.js";
+import * as repo from "../src/repositories/idempotencyRepository.js";
 
-vi.mock("../src/config/db.js", () => {
+vi.mock("../src/repositories/idempotencyRepository.js", () => {
   return {
-    query: vi.fn().mockResolvedValue({ rowCount: 0, rows: [] }),
+    claimIdempotencyKey: vi.fn(),
+    completeIdempotencyKey: vi.fn().mockResolvedValue(undefined),
+    releaseIdempotencyKey: vi.fn().mockResolvedValue(undefined),
   };
 });
 
@@ -20,7 +22,9 @@ describe("idempotencyKeyGuard", () => {
       headers: {},
       method: "POST",
       originalUrl: "/api/test",
-      user: { userId: "user-123" },
+      body: { amount: 100, currency: "GBP" },
+      query: {},
+      user: { userId: "00000000-0000-0000-0000-000000000123" },
     };
     res = {
       status: vi.fn().mockReturnThis(),
@@ -34,71 +38,78 @@ describe("idempotencyKeyGuard", () => {
   it("bypasses requests without Idempotency-Key header", async () => {
     await idempotencyKeyGuard(req, res, next);
     expect(next).toHaveBeenCalledWith();
-    expect(db.query).not.toHaveBeenCalled();
+    expect(repo.claimIdempotencyKey).not.toHaveBeenCalled();
   });
 
-  it("bypasses non-mutating HTTP methods", async () => {
+  it("stores a new request in PROCESSING and completes it on success", async () => {
     req.headers["idempotency-key"] = "key-abc";
-    req.method = "GET";
-    await idempotencyKeyGuard(req, res, next);
-    expect(next).toHaveBeenCalledWith();
-    expect(db.query).not.toHaveBeenCalled();
-  });
-
-  it("handles initial request by storing it in PROCESSING status", async () => {
-    req.headers["idempotency-key"] = "key-abc";
-    vi.mocked(db.query).mockResolvedValueOnce({ rowCount: 0, rows: [] }); // key check
-    vi.mocked(db.query).mockResolvedValueOnce({ rowCount: 1, rows: [] }); // key insert
+    vi.mocked(repo.claimIdempotencyKey).mockResolvedValueOnce({
+      inserted: true,
+      record: { status: "PROCESSING" },
+    });
 
     await idempotencyKeyGuard(req, res, next);
 
-    expect(db.query).toHaveBeenCalledWith(
-      expect.stringContaining("INSERT INTO idempotency_keys"),
-      expect.any(Array)
-    );
+    expect(repo.claimIdempotencyKey).toHaveBeenCalledTimes(1);
     expect(next).toHaveBeenCalledWith();
 
-    // Verify response interception caches the response
-    const mockResponseBody = { success: true };
-    res.json(mockResponseBody);
-
-    // Give microtasks time to execute async database writes
+    res.json({ success: true });
     await new Promise((resolve) => setImmediate(resolve));
 
-    expect(db.query).toHaveBeenCalledWith(
-      expect.stringContaining("UPDATE idempotency_keys SET status = 'COMPLETED'"),
-      expect.any(Array)
+    expect(repo.completeIdempotencyKey).toHaveBeenCalledWith(
+      expect.objectContaining({
+        responseCode: 200,
+        responseBody: { success: true },
+      })
     );
   });
 
-  it("rejects with 409 conflict when request is already in PROGRESS", async () => {
+  it("rejects a duplicate in-progress request", async () => {
     req.headers["idempotency-key"] = "key-abc";
-    vi.mocked(db.query).mockResolvedValueOnce({
-      rowCount: 1,
-      rows: [{ status: "PROCESSING" }],
+    vi.mocked(repo.claimIdempotencyKey).mockImplementationOnce(async ({ requestFingerprint }) => ({
+      inserted: false,
+      record: {
+        status: "PROCESSING",
+        request_fingerprint: requestFingerprint,
+      },
+    }));
+
+    await idempotencyKeyGuard(req, res, next);
+
+    expect(next).toHaveBeenCalledWith(expect.any(AppError));
+    const error = next.mock.calls[0][0];
+    expect(error.code).toBe("IDEMPOTENCY_IN_PROGRESS");
+  });
+
+  it("rejects when the same key is reused with a different payload", async () => {
+    req.headers["idempotency-key"] = "key-abc";
+    vi.mocked(repo.claimIdempotencyKey).mockResolvedValueOnce({
+      inserted: false,
+      record: {
+        status: "PROCESSING",
+        request_fingerprint: "different-fingerprint",
+      },
     });
 
     await idempotencyKeyGuard(req, res, next);
 
     expect(next).toHaveBeenCalledWith(expect.any(AppError));
     const error = next.mock.calls[0][0];
-    expect(error.statusCode).toBe(409);
-    expect(error.code).toBe("IDEMPOTENCY_IN_PROGRESS");
+    expect(error.code).toBe("IDEMPOTENCY_PAYLOAD_MISMATCH");
   });
 
-  it("returns cached response when request was already COMPLETED", async () => {
+  it("replays a cached response for a completed identical request", async () => {
     req.headers["idempotency-key"] = "key-abc";
     const cachedBody = { result: "cached" };
-    vi.mocked(db.query).mockResolvedValueOnce({
-      rowCount: 1,
-      rows: [
-        {
-          status: "COMPLETED",
-          response_code: 201,
-          response_body: cachedBody,
-        },
-      ],
-    });
+    vi.mocked(repo.claimIdempotencyKey).mockImplementationOnce(async ({ requestFingerprint }) => ({
+      inserted: false,
+      record: {
+        status: "COMPLETED",
+        response_code: 201,
+        response_body: cachedBody,
+        request_fingerprint: requestFingerprint,
+      },
+    }));
 
     await idempotencyKeyGuard(req, res, next);
 

@@ -111,12 +111,17 @@ CREATE TABLE archived_reconciliation_exceptions (
 -- 4. Idempotency Keys table for duplicate submission lockouts
 CREATE TABLE idempotency_keys (
     key_hash       VARCHAR(64) PRIMARY KEY,
+    user_id        UUID NOT NULL REFERENCES users(user_id),
+    request_method VARCHAR(10) NOT NULL,
+    request_path   TEXT NOT NULL,
+    request_fingerprint CHAR(64) NOT NULL,
     status         VARCHAR(20) NOT NULL DEFAULT 'PROCESSING' CHECK (status IN ('PROCESSING', 'COMPLETED')),
     response_code  INT,
     response_body  JSONB,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     completed_at   TIMESTAMPTZ
 );
+CREATE INDEX idx_idempotency_user_path ON idempotency_keys(user_id, request_path, created_at DESC);
 
 
 -- 5. Trigram indexes for fast Dashboard text matching
