@@ -121,14 +121,26 @@ export async function findExactMatches(client, { batchId, runDate }) {
 export async function findToleranceMatches(client, { batchId, runDate }) {
   const sql = `
     WITH active_rule AS (
-      SELECT amount_tolerance, date_window_days FROM match_rules
+      SELECT rule_id, amount_tolerance, date_window_days FROM match_rules
       WHERE rule_type = 'TOLERANCE' AND is_active = TRUE ORDER BY priority LIMIT 1
     ),
     candidate_pairs AS (
       SELECT
-        lt.ledger_txn_id, ex.ext_line_id, ABS(lt.amount - ex.amount) AS amount_diff,
-        ROW_NUMBER() OVER (PARTITION BY lt.ledger_txn_id ORDER BY ABS(lt.amount - ex.amount)) AS ledger_rank,
-        ROW_NUMBER() OVER (PARTITION BY ex.ext_line_id ORDER BY ABS(lt.amount - ex.amount)) AS ext_rank
+        lt.ledger_txn_id,
+        ex.ext_line_id,
+        r.rule_id,
+        lt.amount AS ledger_amount,
+        r.amount_tolerance,
+        ABS(lt.amount - ex.amount) AS amount_diff,
+        ABS(lt.value_date - ex.value_date) AS day_diff,
+        ROW_NUMBER() OVER (
+          PARTITION BY lt.ledger_txn_id
+          ORDER BY ABS(lt.amount - ex.amount), ABS(lt.value_date - ex.value_date), ex.ext_line_id
+        ) AS ledger_rank,
+        ROW_NUMBER() OVER (
+          PARTITION BY ex.ext_line_id
+          ORDER BY ABS(lt.amount - ex.amount), ABS(lt.value_date - ex.value_date), lt.ledger_txn_id
+        ) AS ext_rank
       FROM ledger_transactions lt
       JOIN accounts a ON a.account_id = lt.account_id
       JOIN external_statement_lines ex ON ex.account_ref = a.external_ref AND ex.currency = lt.currency AND ex.batch_id = $1
@@ -140,7 +152,9 @@ export async function findToleranceMatches(client, { batchId, runDate }) {
         AND lt.ledger_txn_id NOT IN (SELECT ledger_txn_id FROM match_group_ledger_lines)
         AND ex.ext_line_id NOT IN (SELECT ext_line_id FROM match_group_external_lines)
     )
-    SELECT ledger_txn_id, ext_line_id, amount_diff FROM candidate_pairs WHERE ledger_rank = 1 AND ext_rank = 1;
+    SELECT ledger_txn_id, ext_line_id, rule_id, ledger_amount, amount_diff, amount_tolerance, day_diff
+    FROM candidate_pairs
+    WHERE ledger_rank = 1 AND ext_rank = 1;
   `;
   const result = await client.query(sql, [batchId, runDate]);
   return result.rows;
@@ -222,7 +236,11 @@ export async function generateExceptionsForUnmatched(client, runId, { batchId, r
      FROM ledger_transactions lt
      WHERE lt.value_date = $2
        AND NOT EXISTS (SELECT 1 FROM match_group_ledger_lines mgl WHERE mgl.ledger_txn_id = lt.ledger_txn_id)
-       AND NOT EXISTS (SELECT 1 FROM reconciliation_exceptions e WHERE e.ledger_txn_id = lt.ledger_txn_id)
+       AND NOT EXISTS (
+         SELECT 1
+         FROM reconciliation_exceptions e
+         WHERE e.run_id = $1 AND e.ledger_txn_id = lt.ledger_txn_id
+       )
      RETURNING exception_id`,
     [runId, runDate]
   );
@@ -234,7 +252,11 @@ export async function generateExceptionsForUnmatched(client, runId, { batchId, r
      WHERE ex.batch_id = $2
        AND ex.value_date = $3
        AND NOT EXISTS (SELECT 1 FROM match_group_external_lines mgl WHERE mgl.ext_line_id = ex.ext_line_id)
-       AND NOT EXISTS (SELECT 1 FROM reconciliation_exceptions e WHERE e.ext_line_id = ex.ext_line_id)
+       AND NOT EXISTS (
+         SELECT 1
+         FROM reconciliation_exceptions e
+         WHERE e.run_id = $1 AND e.ext_line_id = ex.ext_line_id
+       )
      RETURNING exception_id`,
     [runId, batchId, runDate]
   );

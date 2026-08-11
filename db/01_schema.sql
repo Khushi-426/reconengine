@@ -233,6 +233,12 @@ CREATE TABLE reconciliation_exceptions (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     CHECK (ledger_txn_id IS NOT NULL OR ext_line_id IS NOT NULL)
 );
+CREATE UNIQUE INDEX uq_recon_exceptions_run_ledger
+    ON reconciliation_exceptions(run_id, ledger_txn_id)
+    WHERE ledger_txn_id IS NOT NULL;
+CREATE UNIQUE INDEX uq_recon_exceptions_run_external
+    ON reconciliation_exceptions(run_id, ext_line_id)
+    WHERE ext_line_id IS NOT NULL;
 CREATE INDEX idx_exceptions_status ON reconciliation_exceptions(status) WHERE status IN ('OPEN','IN_REVIEW');
 CREATE INDEX idx_exceptions_run ON reconciliation_exceptions(run_id);
 -- composite index supporting the most common ops dashboard filter: status + assignee + date

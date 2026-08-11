@@ -13,6 +13,48 @@ import {
   requireExternalSettlementBatch,
 } from "../repositories/matchingRepository.js";
 
+const MAX_BATCH_GREEDY_CANDIDATES = 50;
+
+export function calculateToleranceConfidence({ amountDiff, toleranceAmount, dayDiff = 0 }) {
+  const safeToleranceAmount = Number(toleranceAmount);
+  if (!Number.isFinite(safeToleranceAmount) || safeToleranceAmount <= 0) {
+    return 100;
+  }
+
+  const ratio = Math.min(1, Number(amountDiff) / safeToleranceAmount);
+  const amountPenalty = ratio * 25;
+  const datePenalty = Math.min(10, Number(dayDiff) * 2);
+
+  return Number(Math.max(70, 100 - amountPenalty - datePenalty).toFixed(2));
+}
+
+export function chooseBatchSettlementSubset(ledgerTxns, batchTotal) {
+  const orderedTxns = [...ledgerTxns].sort((a, b) => {
+    if (a.amount !== b.amount) return a.amount - b.amount;
+    return a.ledgerTxnId - b.ledgerTxnId;
+  });
+
+  if (orderedTxns.length > MAX_BATCH_GREEDY_CANDIDATES) {
+    return [];
+  }
+
+  let currentSum = 0;
+  const subset = [];
+  for (const txn of orderedTxns) {
+    currentSum += txn.amount;
+    subset.push(txn.ledgerTxnId);
+
+    if (Math.abs(currentSum - batchTotal) < 0.005) {
+      return subset;
+    }
+    if (currentSum > batchTotal) {
+      return [];
+    }
+  }
+
+  return [];
+}
+
 /**
  * Runs a full reconciliation pass: exact match -> tolerance match -> exception
  * generation for anything left over. The ENTIRE run is one transaction:
@@ -59,10 +101,15 @@ export async function runReconciliation({ runDate, triggeredBy, batchId }) {
     // Pass 2: tolerance matches (FX rounding, fee deltas)
     const toleranceMatches = await findToleranceMatches(client, { batchId: batch.batch_id, runDate });
     for (const m of toleranceMatches) {
-      const confidence = 100 - Math.min(20, Number(m.amount_diff) * 100); // rough confidence heuristic
+      const toleranceAmount = Number(m.ledger_amount) * Number(m.amount_tolerance);
+      const confidence = calculateToleranceConfidence({
+        amountDiff: Number(m.amount_diff),
+        toleranceAmount,
+        dayDiff: Number(m.day_diff),
+      });
       await insertMatchGroup(client, {
         runId,
-        ruleId: null,
+        ruleId: m.rule_id ?? null,
         matchType: "AUTO",
         confidence,
         matchedBy: triggeredBy,
@@ -93,27 +140,10 @@ export async function runReconciliation({ runDate, triggeredBy, batchId }) {
     const matchedLedgerIds = new Set();
     for (const extLineId in groups) {
       const { batchTotal, ledgerTxns } = groups[extLineId];
-      let currentSum = 0;
-      const subset = [];
-      let matched = false;
+      const availableLedger = ledgerTxns.filter((txn) => !matchedLedgerIds.has(txn.ledgerTxnId));
+      const subset = chooseBatchSettlementSubset(availableLedger, batchTotal);
 
-      for (const txn of ledgerTxns) {
-        if (matchedLedgerIds.has(txn.ledgerTxnId)) {
-          continue;
-        }
-        currentSum += txn.amount;
-        subset.push(txn.ledgerTxnId);
-
-        if (Math.abs(currentSum - batchTotal) < 0.005) {
-          matched = true;
-          break;
-        }
-        if (currentSum > batchTotal) {
-          break;
-        }
-      }
-
-      if (matched && subset.length > 0) {
+      if (subset.length > 0) {
         await insertMatchGroup(client, {
           runId,
           ruleId: null,
@@ -125,6 +155,11 @@ export async function runReconciliation({ runDate, triggeredBy, batchId }) {
         });
         subset.forEach(id => matchedLedgerIds.add(id));
         stats.matchedCount += 1;
+      } else if (availableLedger.length > MAX_BATCH_GREEDY_CANDIDATES) {
+        logger.warn(
+          { extLineId: Number(extLineId), candidateCount: availableLedger.length, batchTotal },
+          "Skipped batch-settlement candidate set because greedy subset matcher safety limit was exceeded"
+        );
       }
     }
     logger.info({ runId, count: matchedLedgerIds.size }, "Batch settlement match pass complete");
