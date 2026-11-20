@@ -1,12 +1,7 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { api } from "../api/client.js";
-
-const STATUS_COLORS = {
-  COMPLETED: "bg-green-100 text-green-800",
-  PROCESSING: "bg-blue-100 text-blue-800",
-  FAILED: "bg-red-100 text-red-800",
-  PENDING: "bg-amber-100 text-amber-800",
-};
+import { StatusBadge, Button, Alert, EmptyState, LoadingSpinner } from "../components/common.jsx";
+import { formatDateTime } from "../utils/formatters.js";
 
 export default function ImportHistory() {
   const [data, setData] = useState({ data: [], pagination: { page: 1, totalPages: 1, total: 0 } });
@@ -22,7 +17,7 @@ export default function ImportHistory() {
       const result = await api.get(`/imports/batches?page=${page}&pageSize=15`);
       setData(result);
     } catch (err) {
-      setErrorMsg(err.message);
+      setErrorMsg(err.message || "Failed to load import batch history.");
     } finally {
       setLoading(false);
     }
@@ -33,121 +28,150 @@ export default function ImportHistory() {
   }, [fetchHistory]);
 
   return (
-    <div className="max-w-6xl mx-auto p-6">
-      <div className="flex justify-between items-center mb-6">
+    <div className="space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-slate-200 dark:border-slate-800 pb-4">
         <div>
-          <h2 className="text-xl font-semibold text-slate-800">Import History</h2>
-          <p className="text-sm text-slate-500">Track and inspect all statement feed ingestion batches.</p>
+          <h2 className="text-xl font-bold tracking-tight text-slate-900 dark:text-white">
+            Import Batches & Feeds
+          </h2>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+            Audit history of ingested statement files, hash deduplication, and row counts.
+          </p>
         </div>
+        <Button variant="secondary" size="sm" onClick={fetchHistory} loading={loading}>
+          Refresh Batches
+        </Button>
       </div>
 
       {errorMsg && (
-        <div className="bg-red-50 border border-red-200 text-red-800 text-sm px-4 py-3 rounded-md mb-6">
-          {errorMsg}
-        </div>
+        <Alert variant="error" className="flex justify-between items-center">
+          <span>{errorMsg}</span>
+          <button onClick={() => setErrorMsg(null)} className="text-xs font-semibold ml-4 hover:underline">&times;</button>
+        </Alert>
       )}
 
-      <div className="bg-white rounded-lg border border-slate-200 overflow-hidden shadow-sm">
-        <table className="w-full text-sm text-left">
-          <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-medium">
-            <tr>
-              <th className="px-6 py-3">Batch ID</th>
-              <th className="px-6 py-3">File Name</th>
-              <th className="px-6 py-3">Source</th>
-              <th className="px-6 py-3">Status</th>
-              <th className="px-6 py-3">Row Count</th>
-              <th className="px-6 py-3">Uploaded By</th>
-              <th className="px-6 py-3">Uploaded At</th>
-              <th className="px-6 py-3"></th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-200">
-            {loading && (
+      <div className="bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-800 overflow-hidden shadow-xs">
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs text-left">
+            <thead className="bg-slate-50 dark:bg-slate-950/80 border-b border-slate-200 dark:border-slate-800 text-slate-500 uppercase font-semibold text-[10px] tracking-wider">
               <tr>
-                <td colSpan={8} className="px-6 py-8 text-center text-slate-400">
-                  Loading history...
-                </td>
+                <th className="px-4 py-3 font-mono">Batch ID</th>
+                <th className="px-4 py-3 font-mono">File Name</th>
+                <th className="px-4 py-3">Source Channel</th>
+                <th className="px-4 py-3">Status</th>
+                <th className="px-4 py-3 text-right">Rows</th>
+                <th className="px-4 py-3">Uploaded By</th>
+                <th className="px-4 py-3 font-mono">Uploaded At</th>
+                <th className="px-4 py-3 text-right">Action</th>
               </tr>
-            )}
-            {!loading && data.data.length === 0 && (
-              <tr>
-                <td colSpan={8} className="px-6 py-8 text-center text-slate-400">
-                  No import batches found.
-                </td>
-              </tr>
-            )}
-            {!loading &&
-              data.data.map((batch) => (
-                <tr key={batch.batch_id} className="hover:bg-slate-50/70 transition">
-                  <td className="px-6 py-4 font-mono text-xs text-slate-600">#{batch.batch_id}</td>
-                  <td className="px-6 py-4 font-medium text-slate-800">{batch.file_name}</td>
-                  <td className="px-6 py-4 text-slate-600">{batch.source_name}</td>
-                  <td className="px-6 py-4">
-                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[batch.status] || "bg-slate-100 text-slate-800"}`}>
-                      {batch.status}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 text-slate-700">{batch.row_count}</td>
-                  <td className="px-6 py-4 text-slate-600">{batch.uploaded_by_name || "System"}</td>
-                  <td className="px-6 py-4 text-slate-500 text-xs">
-                    {new Date(batch.created_at).toLocaleString()}
-                  </td>
-                  <td className="px-6 py-4 text-right">
-                    {batch.status === "FAILED" && batch.error_message && (
-                      <button
-                        onClick={() => setSelectedError(batch.error_message)}
-                        className="text-red-600 hover:text-red-800 font-medium text-xs underline"
-                      >
-                        View Errors
-                      </button>
-                    )}
+            </thead>
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+              {loading && (
+                <tr>
+                  <td colSpan={8}>
+                    <LoadingSpinner label="Loading ingestion batch history..." />
                   </td>
                 </tr>
-              ))}
-          </tbody>
-        </table>
+              )}
 
-        {/* Pagination */}
-        <div className="bg-slate-50 px-6 py-4 border-t border-slate-200 flex justify-between items-center text-sm text-slate-600">
-          <span>{data.pagination.total} batches uploaded</span>
-          <div className="flex gap-2">
-            <button
+              {!loading && data.data.length === 0 && (
+                <tr>
+                  <td colSpan={8} className="p-6">
+                    <EmptyState
+                      title="No import batches found"
+                      description="No statement files or ledger batches have been ingested into the system yet."
+                    />
+                  </td>
+                </tr>
+              )}
+
+              {!loading &&
+                data.data.map((batch) => (
+                  <tr key={batch.batch_id} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition">
+                    <td className="px-4 py-3 font-mono font-medium text-slate-500">
+                      #{batch.batch_id}
+                    </td>
+                    <td className="px-4 py-3 font-mono font-semibold text-slate-900 dark:text-white">
+                      {batch.file_name}
+                    </td>
+                    <td className="px-4 py-3 text-slate-600 dark:text-slate-300">
+                      {batch.source_name}
+                    </td>
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      <StatusBadge status={batch.status} />
+                    </td>
+                    <td className="px-4 py-3 text-right font-mono font-bold text-slate-800 dark:text-slate-200">
+                      {batch.row_count?.toLocaleString()}
+                    </td>
+                    <td className="px-4 py-3 text-slate-600 dark:text-slate-400">
+                      {batch.uploaded_by_name || "System automated"}
+                    </td>
+                    <td className="px-4 py-3 font-mono text-slate-500 whitespace-nowrap">
+                      {formatDateTime(batch.created_at)}
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      {batch.status === "FAILED" && batch.error_message ? (
+                        <Button
+                          size="sm"
+                          variant="danger"
+                          onClick={() => setSelectedError(batch.error_message)}
+                        >
+                          View Errors
+                        </Button>
+                      ) : (
+                        <span className="text-slate-400">—</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Pagination Bar */}
+        <div className="bg-slate-50 dark:bg-slate-950 px-4 py-3 border-t border-slate-200 dark:border-slate-800 flex justify-between items-center text-xs text-slate-600 dark:text-slate-400">
+          <span>
+            Total <strong className="font-mono">{data.pagination.total}</strong> ingested batches
+          </span>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
               disabled={page <= 1}
               onClick={() => setPage((p) => p - 1)}
-              className="px-3 py-1.5 border border-slate-300 rounded-md disabled:opacity-40 bg-white hover:bg-slate-50 transition"
             >
               Previous
-            </button>
-            <span className="px-2 py-1.5 font-medium text-slate-800">
+            </Button>
+            <span className="font-mono px-2">
               Page {page} of {data.pagination.totalPages || 1}
             </span>
-            <button
+            <Button
+              variant="secondary"
+              size="sm"
               disabled={page >= data.pagination.totalPages}
               onClick={() => setPage((p) => p + 1)}
-              className="px-3 py-1.5 border border-slate-300 rounded-md disabled:opacity-40 bg-white hover:bg-slate-50 transition"
             >
               Next
-            </button>
+            </Button>
           </div>
         </div>
       </div>
 
       {/* Errors Modal */}
       {selectedError && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-xl">
-            <h3 className="text-lg font-semibold text-slate-800 mb-2">Ingestion Failure Details</h3>
-            <p className="text-sm text-slate-500 mb-4">The following error occurred during statement file ingestion:</p>
-            <div className="bg-slate-50 border border-slate-200 rounded p-4 max-h-80 overflow-y-auto font-mono text-xs text-red-700 whitespace-pre-wrap">
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-slate-900 rounded-lg shadow-xl border border-slate-200 dark:border-slate-800 p-6 w-full max-w-xl">
+            <h3 className="text-base font-bold text-slate-900 dark:text-white mb-1">
+              Ingestion Failure Breakdown
+            </h3>
+            <p className="text-xs text-slate-500 mb-4">The following error was recorded by the ingestion pipeline:</p>
+            <div className="bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded p-3 max-h-80 overflow-y-auto font-mono text-xs text-rose-600 dark:text-rose-400 whitespace-pre-wrap">
               {selectedError}
             </div>
             <div className="flex justify-end mt-4">
-              <button
-                onClick={() => setSelectedError(null)}
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white text-sm font-medium rounded-md transition"
-              >
+              <Button size="md" variant="secondary" onClick={() => setSelectedError(null)}>
                 Close
-              </button>
+              </Button>
             </div>
           </div>
         </div>
