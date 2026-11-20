@@ -1,7 +1,7 @@
 import React from "react";
 import { StatusBadge, Button } from "./common.jsx";
 import { formatMoney, formatDateTime, formatDate, formatSlaCountdown } from "../utils/formatters.js";
-import AiInvestigationPanel from "./AiInvestigationPanel.jsx";
+import InvestigationPanel from "./InvestigationPanel.jsx";
 
 export default function ExceptionDetailDrawer({ exception, onClose, onAction, userRole, currentUserId }) {
   if (!exception) return null;
@@ -177,8 +177,8 @@ export default function ExceptionDetailDrawer({ exception, onClose, onAction, us
             </ol>
           </section>
 
-          {/* AI Investigation Assistant Panel */}
-          <AiInvestigationPanel exceptionId={exception.exception_id} />
+          {/* Deterministic Investigation Panel */}
+          <InvestigationPanel exceptionId={exception.exception_id} />
         </div>
 
         {/* Footer Actions */}

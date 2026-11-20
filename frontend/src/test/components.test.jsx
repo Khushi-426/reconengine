@@ -2,12 +2,13 @@ import React from "react";
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import ResolveExceptionModal from "../components/ResolveExceptionModal.jsx";
-import AiInvestigationPanel from "../components/AiInvestigationPanel.jsx";
+import InvestigationPanel from "../components/InvestigationPanel.jsx";
 import { formatMoney, formatSlaCountdown } from "../utils/formatters.js";
 
 // Mock API client
 vi.mock("../api/client.js", () => ({
   api: {
+    get: vi.fn(),
     post: vi.fn(),
     patch: vi.fn(),
   },
@@ -80,71 +81,60 @@ describe("formatters", () => {
   });
 });
 
-describe("AiInvestigationPanel", () => {
-  const mockApiResponse = {
-    data: {
-      investigationId: 10,
-      exceptionId: 101,
-      status: "SUCCESS_MODEL",
-      deterministicHints: {
-        category: "AMOUNT_MISMATCH",
-        amountDiffFormatted: "0.50",
-        dateDiffDays: 0,
+describe("InvestigationPanel", () => {
+  const investigation = {
+    investigation_id: "10",
+    status: "COMPLETED",
+    stages: [],
+    result: {
+      discrepancyCategory: "AMOUNT_MISMATCH",
+      verification: { status: "VERIFIED_WITH_DISCLOSED_LIMITATIONS" },
+      analysis: { calculations: { amountDifference: "0.50", currency: "GBP", dateDifferenceDays: 0 } },
+      evidence: { evidenceIds: ["EXCEPTION_101", "LEDGER_101"], missingEvidence: [] },
+      investigation: {
+        hypotheses: [{ cause: "AMOUNT_DISCREPANCY", explanation: "Variance observed between ledger and bank feed.", supportingEvidence: ["EXCEPTION_101"], rule: "AMOUNT_TOLERANCE_EXCEEDED", confirmed: false }],
+        nextSteps: ["Request bank tariff sheet for fee verification"],
       },
-      aiAnalysis: {
-        summary: "Variance observed between ledger and bank feed.",
-        suspected_category: "AMOUNT_MISMATCH",
-        possible_explanations: [
-          {
-            hypothesis: "Minor bank clearing transaction surcharge applied.",
-            supporting_evidence_ids: ["EXCEPTION_101", "LEDGER_101"],
-            confidence: "HIGH",
-          },
-        ],
-        recommended_next_checks: ["Request bank tariff sheet for fee verification"],
-        uncertainty: "Low uncertainty",
-        missing_evidence: [],
-      },
+      report: { title: "Investigation report", evidence: ["EXCEPTION_101", "LEDGER_101"] },
     },
   };
 
-  it("renders AI disclaimer and runs investigation on demand", async () => {
+  it("queues and displays the deterministic investigation report", async () => {
     const { api } = await import("../api/client.js");
-    api.post.mockResolvedValueOnce(mockApiResponse);
+    api.post.mockResolvedValueOnce({ investigationId: "10" });
+    api.get.mockResolvedValueOnce(investigation);
 
-    render(<AiInvestigationPanel exceptionId={101} />);
-
-    // Safety disclaimer must be displayed immediately
-    expect(screen.getByText(/AI-generated suggestion. Requires analyst judgment./i)).toBeInTheDocument();
-
-    const investigateBtn = screen.getByRole("button", { name: /investigate break/i });
+    render(<InvestigationPanel exceptionId={101} />);
+    expect(screen.getByText(/Rule-based analysis from source records/i)).toBeInTheDocument();
+    const investigateBtn = screen.getByRole("button", { name: /investigate/i });
     fireEvent.click(investigateBtn);
 
     await waitFor(() => {
-      expect(screen.getByText(/Minor bank clearing transaction surcharge applied./i)).toBeInTheDocument();
+      expect(screen.getByText(/Variance observed between ledger and bank feed./i)).toBeInTheDocument();
       expect(screen.getByText(/EXCEPTION_101/i)).toBeInTheDocument();
       expect(screen.getByText(/Request bank tariff sheet for fee verification/i)).toBeInTheDocument();
-      expect(screen.getByText(/HIGH CONFIDENCE/i)).toBeInTheDocument();
+      expect(screen.getByText(/Possible/i)).toBeInTheDocument();
     });
   });
 
   it("allows submitting user feedback on the investigation", async () => {
     const { api } = await import("../api/client.js");
-    api.post.mockResolvedValueOnce(mockApiResponse);
-    api.post.mockResolvedValueOnce({ data: { feedback_id: 1 } });
+    api.post.mockResolvedValueOnce({ investigationId: "10" });
+    api.post.mockResolvedValueOnce({ feedback_id: 1 });
+    api.get.mockResolvedValueOnce(investigation);
 
-    render(<AiInvestigationPanel exceptionId={101} />);
-    fireEvent.click(screen.getByRole("button", { name: /investigate break/i }));
+    render(<InvestigationPanel exceptionId={101} />);
+    fireEvent.click(screen.getByRole("button", { name: /investigate/i }));
 
     await waitFor(() => {
-      expect(screen.getByText(/Was this investigation analysis helpful/i)).toBeInTheDocument();
+      expect(screen.getByText(/Was this useful/i)).toBeInTheDocument();
     });
 
-    const thumbsUpBtn = screen.getByRole("button", { name: /👍 Yes/i });
+    const thumbsUpBtn = screen.getByRole("button", { name: /Yes/i });
     fireEvent.click(thumbsUpBtn);
 
     await waitFor(() => {
-      expect(screen.getByText(/Your investigation feedback has been recorded/i)).toBeInTheDocument();
+      expect(screen.getByText(/Feedback recorded/i)).toBeInTheDocument();
     });
   });
 });

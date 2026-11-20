@@ -17,6 +17,8 @@ export const migrationFiles = [
   "../../../db/09_partitioning_and_tuning.sql",
   "../../../db/10_security_improvements.sql",
   "../../../db/11_ai_investigations.sql",
+  "../../../db/12_multi_agent_system.sql",
+  "../../../db/13_deterministic_investigations.sql",
 ];
 
 function checksum(content) {

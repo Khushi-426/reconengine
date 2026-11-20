@@ -9,6 +9,7 @@ import {
   approveExceptionHandler,
   closeExceptionHandler,
   investigateExceptionHandler,
+  getInvestigationHandler,
   recordFeedbackHandler,
 } from "../controllers/exceptionsController.js";
 import { authenticate, authorize } from "../middleware/auth.js";
@@ -18,8 +19,9 @@ import {
   resolveExceptionSchema,
   assignExceptionSchema,
   exceptionIdParamSchema,
+  investigationIdParamSchema,
   workflowActionSchema,
-  aiFeedbackSchema,
+  investigationFeedbackSchema,
 } from "../utils/schemas.js";
 
 const router = Router();
@@ -30,7 +32,7 @@ router.use(idempotencyKeyGuard);
 router.get("/", validate({ query: listExceptionsQuerySchema }), listExceptionsHandler);
 router.get("/reports/trend", trendReportHandler);
 
-// AI Investigation Assistant Endpoints (Read-Only)
+// Deterministic investigation endpoints (read-only against source records)
 router.post(
   "/:exceptionId/investigate",
   authorize("ANALYST", "APPROVER", "ADMIN", "AUDITOR"),
@@ -38,10 +40,17 @@ router.post(
   investigateExceptionHandler
 );
 
+router.get(
+  "/investigations/:investigationId",
+  authorize("ANALYST", "APPROVER", "ADMIN", "AUDITOR"),
+  validate({ params: investigationIdParamSchema }),
+  getInvestigationHandler
+);
+
 router.post(
   "/investigations/:investigationId/feedback",
   authorize("ANALYST", "APPROVER", "ADMIN", "AUDITOR"),
-  validate({ body: aiFeedbackSchema }),
+  validate({ body: investigationFeedbackSchema }),
   recordFeedbackHandler
 );
 

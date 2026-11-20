@@ -107,6 +107,12 @@ curl -H "Authorization: Bearer <access-token>" \
 
 The API selects the newest completed external batch with lines and stores its `batchId` in the job. The matching engine scopes exact, tolerance, batch-settlement, and exception generation to that batch and the requested internal-ledger date. It creates `match_groups` for matches and `reconciliation_exceptions` for unmatched ledger or external lines.
 
+## Investigate an exception
+
+ReconEngine runs investigations asynchronously through the existing PostgreSQL worker queue. Start the API and worker, then use **Investigate** from an exception detail. `POST /api/exceptions/:exceptionId/investigate` returns `202` with the investigation and job IDs; repeat requests reuse an active investigation. Poll `GET /api/exceptions/investigations/:investigationId` for status, four agent stages, and the final report. Analysts can submit feedback at `POST /api/exceptions/investigations/:investigationId/feedback`.
+
+The deterministic stages and configuration are documented in [docs/deterministic-investigation.md](docs/deterministic-investigation.md). Amount tolerance defaults to `0.00` and date tolerance to 2 days; configure them with `INVESTIGATION_AMOUNT_TOLERANCE` and `INVESTIGATION_DATE_TOLERANCE_DAYS`.
+
 ## Folder structure
 
 ```text

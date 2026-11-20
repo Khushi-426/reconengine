@@ -2,6 +2,7 @@ import crypto from "crypto";
 import { withTransaction, query } from "../config/db.js";
 import { logger } from "../config/logger.js";
 import { runReconciliation } from "../services/matchingService.js";
+import { runInvestigationJob } from "../services/investigation/orchestrator.js";
 import {
   claimNextJob,
   updateJobHeartbeat,
@@ -107,6 +108,8 @@ export class JobWorker {
           const result = await archiveOldJobsAndExceptions(client, 30);
           logger.info({ jobId, workerId, ...result }, "Archiving and partition pre-creation completed");
         });
+      } else if (job.job_type === "INVESTIGATION_RUN") {
+        await runInvestigationJob({ ...job.payload, jobId, workerId, attempt: job.attempts });
       } else {
         throw new Error(`Unsupported job type: ${job.job_type}`);
       }

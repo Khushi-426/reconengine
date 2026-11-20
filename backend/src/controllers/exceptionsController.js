@@ -110,24 +110,32 @@ export async function trendReportHandler(req, res, next) {
 export async function investigateExceptionHandler(req, res, next) {
   try {
     const { exceptionId } = req.params;
-    const { investigateException } = await import("../services/aiInvestigationService.js");
-    const result = await investigateException({
+    const { enqueueInvestigation } = await import("../services/investigationService.js");
+    const result = await enqueueInvestigation({
       exceptionId: parseInt(exceptionId, 10),
       userId: req.user.userId,
       userRole: req.user.role,
-      correlationId: req.correlationId,
     });
-    res.json(result);
+    res.status(result.reused ? 200 : 202).json(result);
   } catch (err) {
     next(err);
   }
+}
+
+export async function getInvestigationHandler(req, res, next) {
+  try {
+    const { investigationId } = req.params;
+    const { getInvestigationForUser } = await import("../services/investigationService.js");
+    const result = await getInvestigationForUser({ investigationId: parseInt(investigationId, 10), userId: req.user.userId, userRole: req.user.role });
+    res.json(result);
+  } catch (err) { next(err); }
 }
 
 export async function recordFeedbackHandler(req, res, next) {
   try {
     const { investigationId } = req.params;
     const { isUseful, comment } = req.body;
-    const { recordInvestigationFeedback } = await import("../services/aiInvestigationService.js");
+    const { recordInvestigationFeedback } = await import("../services/investigationService.js");
     const result = await recordInvestigationFeedback({
       investigationId: parseInt(investigationId, 10),
       userId: req.user.userId,

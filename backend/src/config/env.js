@@ -37,13 +37,8 @@ export const config = {
     maxFileSizeBytes: 25 * 1024 * 1024, // 25MB
     allowedMimeTypes: ["text/csv", "application/vnd.ms-excel", "text/plain"],
   },
-  ai: {
-    enabled: process.env.AI_ASSISTANT_ENABLED === "true",
-    provider: process.env.AI_PROVIDER || "mock", // "gemini" | "openai" | "mock"
-    apiKey: process.env.AI_API_KEY || "",
-    model: process.env.AI_MODEL || "gemini-1.5-flash",
-    timeoutMs: parseInt(process.env.AI_TIMEOUT_MS || "6000", 10),
-    maxRetries: parseInt(process.env.AI_MAX_RETRIES || "1", 10),
-    promptVersion: "2026.11-v1",
+  investigation: {
+    amountTolerance: process.env.INVESTIGATION_AMOUNT_TOLERANCE || "0.00",
+    dateToleranceDays: parseInt(process.env.INVESTIGATION_DATE_TOLERANCE_DAYS || "2", 10),
   },
 };
