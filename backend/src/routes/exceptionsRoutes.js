@@ -8,6 +8,8 @@ import {
   startWorkExceptionHandler,
   approveExceptionHandler,
   closeExceptionHandler,
+  investigateExceptionHandler,
+  recordFeedbackHandler,
 } from "../controllers/exceptionsController.js";
 import { authenticate, authorize } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
@@ -17,6 +19,7 @@ import {
   assignExceptionSchema,
   exceptionIdParamSchema,
   workflowActionSchema,
+  aiFeedbackSchema,
 } from "../utils/schemas.js";
 
 const router = Router();
@@ -26,6 +29,21 @@ router.use(idempotencyKeyGuard);
 
 router.get("/", validate({ query: listExceptionsQuerySchema }), listExceptionsHandler);
 router.get("/reports/trend", trendReportHandler);
+
+// AI Investigation Assistant Endpoints (Read-Only)
+router.post(
+  "/:exceptionId/investigate",
+  authorize("ANALYST", "APPROVER", "ADMIN", "AUDITOR"),
+  validate({ params: exceptionIdParamSchema }),
+  investigateExceptionHandler
+);
+
+router.post(
+  "/investigations/:investigationId/feedback",
+  authorize("ANALYST", "APPROVER", "ADMIN", "AUDITOR"),
+  validate({ body: aiFeedbackSchema }),
+  recordFeedbackHandler
+);
 
 router.patch(
   "/:exceptionId/start-work",

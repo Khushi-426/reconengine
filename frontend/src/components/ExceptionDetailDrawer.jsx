@@ -1,6 +1,7 @@
 import React from "react";
 import { StatusBadge, Button } from "./common.jsx";
 import { formatMoney, formatDateTime, formatDate, formatSlaCountdown } from "../utils/formatters.js";
+import AiInvestigationPanel from "./AiInvestigationPanel.jsx";
 
 export default function ExceptionDetailDrawer({ exception, onClose, onAction, userRole, currentUserId }) {
   if (!exception) return null;
@@ -176,20 +177,8 @@ export default function ExceptionDetailDrawer({ exception, onClose, onAction, us
             </ol>
           </section>
 
-          {/* AI Investigation Panel Placeholder (Strictly Disabled) */}
-          <section className="p-4 rounded-lg border border-dashed border-slate-300 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/40">
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-                Automated Break Diagnosis
-              </span>
-              <span className="text-[10px] bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400 px-1.5 py-0.5 rounded font-mono">
-                Not Available
-              </span>
-            </div>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              Automated AI investigation is disabled in this phase. Manual analyst investigation and audit sign-off required for all breaks.
-            </p>
-          </section>
+          {/* AI Investigation Assistant Panel */}
+          <AiInvestigationPanel exceptionId={exception.exception_id} />
         </div>
 
         {/* Footer Actions */}

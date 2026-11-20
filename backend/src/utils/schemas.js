@@ -31,6 +31,11 @@ export const exceptionIdParamSchema = z.object({
   exceptionId: z.coerce.number().int().positive(),
 });
 
+export const aiFeedbackSchema = z.object({
+  isUseful: z.boolean(),
+  comment: z.string().max(1000).optional(),
+});
+
 export const triggerRunSchema = z.object({
   runDate: z.string().date().optional(),
 });

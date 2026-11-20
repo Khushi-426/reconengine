@@ -106,3 +106,37 @@ export async function trendReportHandler(req, res, next) {
     next(err);
   }
 }
+
+export async function investigateExceptionHandler(req, res, next) {
+  try {
+    const { exceptionId } = req.params;
+    const { investigateException } = await import("../services/aiInvestigationService.js");
+    const result = await investigateException({
+      exceptionId: parseInt(exceptionId, 10),
+      userId: req.user.userId,
+      userRole: req.user.role,
+      correlationId: req.correlationId,
+    });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function recordFeedbackHandler(req, res, next) {
+  try {
+    const { investigationId } = req.params;
+    const { isUseful, comment } = req.body;
+    const { recordInvestigationFeedback } = await import("../services/aiInvestigationService.js");
+    const result = await recordInvestigationFeedback({
+      investigationId: parseInt(investigationId, 10),
+      userId: req.user.userId,
+      userRole: req.user.role,
+      isUseful,
+      comment,
+    });
+    res.status(201).json(result);
+  } catch (err) {
+    next(err);
+  }
+}

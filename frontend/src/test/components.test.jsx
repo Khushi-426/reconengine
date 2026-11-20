@@ -1,12 +1,14 @@
 import React from "react";
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import ResolveExceptionModal from "../components/ResolveExceptionModal.jsx";
+import AiInvestigationPanel from "../components/AiInvestigationPanel.jsx";
 import { formatMoney, formatSlaCountdown } from "../utils/formatters.js";
 
 // Mock API client
 vi.mock("../api/client.js", () => ({
   api: {
+    post: vi.fn(),
     patch: vi.fn(),
   },
 }));
@@ -75,5 +77,74 @@ describe("formatters", () => {
     expect(formatSlaCountdown(3660)).toBe("1h 1m left");
     expect(formatSlaCountdown(-1800)).toBe("Breached (+0h 30m)");
     expect(formatSlaCountdown(null)).toBe("—");
+  });
+});
+
+describe("AiInvestigationPanel", () => {
+  const mockApiResponse = {
+    data: {
+      investigationId: 10,
+      exceptionId: 101,
+      status: "SUCCESS_MODEL",
+      deterministicHints: {
+        category: "AMOUNT_MISMATCH",
+        amountDiffFormatted: "0.50",
+        dateDiffDays: 0,
+      },
+      aiAnalysis: {
+        summary: "Variance observed between ledger and bank feed.",
+        suspected_category: "AMOUNT_MISMATCH",
+        possible_explanations: [
+          {
+            hypothesis: "Minor bank clearing transaction surcharge applied.",
+            supporting_evidence_ids: ["EXCEPTION_101", "LEDGER_101"],
+            confidence: "HIGH",
+          },
+        ],
+        recommended_next_checks: ["Request bank tariff sheet for fee verification"],
+        uncertainty: "Low uncertainty",
+        missing_evidence: [],
+      },
+    },
+  };
+
+  it("renders AI disclaimer and runs investigation on demand", async () => {
+    const { api } = await import("../api/client.js");
+    api.post.mockResolvedValueOnce(mockApiResponse);
+
+    render(<AiInvestigationPanel exceptionId={101} />);
+
+    // Safety disclaimer must be displayed immediately
+    expect(screen.getByText(/AI-generated suggestion. Requires analyst judgment./i)).toBeInTheDocument();
+
+    const investigateBtn = screen.getByRole("button", { name: /investigate break/i });
+    fireEvent.click(investigateBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Minor bank clearing transaction surcharge applied./i)).toBeInTheDocument();
+      expect(screen.getByText(/EXCEPTION_101/i)).toBeInTheDocument();
+      expect(screen.getByText(/Request bank tariff sheet for fee verification/i)).toBeInTheDocument();
+      expect(screen.getByText(/HIGH CONFIDENCE/i)).toBeInTheDocument();
+    });
+  });
+
+  it("allows submitting user feedback on the investigation", async () => {
+    const { api } = await import("../api/client.js");
+    api.post.mockResolvedValueOnce(mockApiResponse);
+    api.post.mockResolvedValueOnce({ data: { feedback_id: 1 } });
+
+    render(<AiInvestigationPanel exceptionId={101} />);
+    fireEvent.click(screen.getByRole("button", { name: /investigate break/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Was this investigation analysis helpful/i)).toBeInTheDocument();
+    });
+
+    const thumbsUpBtn = screen.getByRole("button", { name: /👍 Yes/i });
+    fireEvent.click(thumbsUpBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Your investigation feedback has been recorded/i)).toBeInTheDocument();
+    });
   });
 });

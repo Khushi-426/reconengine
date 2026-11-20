@@ -16,6 +16,7 @@ export const migrationFiles = [
   "../../../db/08_notifications.sql",
   "../../../db/09_partitioning_and_tuning.sql",
   "../../../db/10_security_improvements.sql",
+  "../../../db/11_ai_investigations.sql",
 ];
 
 function checksum(content) {
