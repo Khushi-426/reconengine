@@ -28,26 +28,48 @@ export function calculateToleranceConfidence({ amountDiff, toleranceAmount, dayD
   return Number(Math.max(70, 100 - amountPenalty - datePenalty).toFixed(2));
 }
 
+/**
+ * Precision-safe batch subset selection.
+ *
+ * All amounts from PostgreSQL NUMERIC(18,2) have at most 2 decimal places.
+ * We convert to integer cents (multiply by 100 and round) so all arithmetic
+ * is exact integer arithmetic — no floating-point drift or epsilon comparisons.
+ *
+ * Returns an ordered array of ledgerTxnIds whose amounts sum to batchTotal,
+ * or [] if no such prefix-sum subset exists within the candidate set.
+ *
+ * When more than MAX_BATCH_GREEDY_CANDIDATES candidates exist the function
+ * returns [] — the caller MUST surface this as a visible exception, not silently drop work.
+ */
 export function chooseBatchSettlementSubset(ledgerTxns, batchTotal) {
-  const orderedTxns = [...ledgerTxns].sort((a, b) => {
-    if (a.amount !== b.amount) return a.amount - b.amount;
-    return a.ledgerTxnId - b.ledgerTxnId;
-  });
+  // Convert to integer cents to avoid floating-point imprecision
+  const toCents = (v) => Math.round(Number(v) * 100);
+
+  const batchCents = toCents(batchTotal);
+
+  const orderedTxns = [...ledgerTxns]
+    .map((t) => ({ ...t, amountCents: toCents(t.amount) }))
+    .sort((a, b) => {
+      if (a.amountCents !== b.amountCents) return a.amountCents - b.amountCents;
+      // Deterministic tie-break: lower ledgerTxnId first
+      return a.ledgerTxnId - b.ledgerTxnId;
+    });
 
   if (orderedTxns.length > MAX_BATCH_GREEDY_CANDIDATES) {
     return [];
   }
 
-  let currentSum = 0;
+  let currentCents = 0;
   const subset = [];
   for (const txn of orderedTxns) {
-    currentSum += txn.amount;
+    currentCents += txn.amountCents;
     subset.push(txn.ledgerTxnId);
 
-    if (Math.abs(currentSum - batchTotal) < 0.005) {
+    if (currentCents === batchCents) {
       return subset;
     }
-    if (currentSum > batchTotal) {
+    if (currentCents > batchCents) {
+      // Overshoot — greedy prefix cannot match; return empty
       return [];
     }
   }
@@ -156,9 +178,11 @@ export async function runReconciliation({ runDate, triggeredBy, batchId }) {
         subset.forEach(id => matchedLedgerIds.add(id));
         stats.matchedCount += 1;
       } else if (availableLedger.length > MAX_BATCH_GREEDY_CANDIDATES) {
+        // The cap was hit: the external line will fall through to pass 4
+        // and become a MISSING_INTERNAL exception, surfacing it for analyst review.
         logger.warn(
-          { extLineId: Number(extLineId), candidateCount: availableLedger.length, batchTotal },
-          "Skipped batch-settlement candidate set because greedy subset matcher safety limit was exceeded"
+          { runId, extLineId: Number(extLineId), candidateCount: availableLedger.length, batchTotal },
+          "Batch-settlement candidate count exceeds safety limit — ext line will produce MISSING_INTERNAL exception for analyst review"
         );
       }
     }

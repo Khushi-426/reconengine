@@ -72,7 +72,7 @@ export class JobWorker {
 
       if (job) {
         this.executeJob(job).catch((err) => {
-          logger.error({ err, jobId: job.job_id }, "Unhandled exception in job execution wrapper");
+          logger.error({ err, jobId: job.job_id, workerId: this.workerId }, "Unhandled exception in job execution wrapper");
         });
         // Immediately check if we have more capacity
         setImmediate(() => this.poll());
@@ -80,15 +80,18 @@ export class JobWorker {
         this.pollTimer = setTimeout(() => this.poll(), this.pollIntervalMs);
       }
     } catch (err) {
-      logger.error({ err }, "Error polling for next background job");
+      logger.error({ err, workerId: this.workerId }, "Error polling for next background job");
       this.pollTimer = setTimeout(() => this.poll(), 5000); // back off on DB errors
     }
   }
 
   async executeJob(job) {
     const jobId = job.job_id;
+    const workerId = this.workerId;
     this.activeJobs.set(jobId, job);
-    logger.info({ jobId, type: job.job_type }, "Executing background job");
+    logger.info({ jobId, jobType: job.job_type, workerId }, "Executing background job");
+
+    let jobError = null;
 
     try {
       if (job.job_type === "RECONCILIATION_RUN") {
@@ -96,51 +99,73 @@ export class JobWorker {
         if (!runDate) throw new Error("Reconciliation runDate is required in job payload");
         await runReconciliation({ runDate, batchId, triggeredBy });
       } else if (job.job_type === "REFRESH_DAILY_SUMMARY") {
-        logger.info("Refreshing daily reconciliation summary materialized view...");
+        logger.info({ jobId, workerId }, "Refreshing daily reconciliation summary materialized view...");
         await query("SELECT fn_refresh_daily_summary()");
       } else if (job.job_type === "ARCHIVE_CLEANUP_JOBS") {
-        logger.info("Archiving closed exceptions and completed jobs...");
+        logger.info({ jobId, workerId }, "Archiving closed exceptions and completed jobs...");
         await withTransaction(async (client) => {
           const result = await archiveOldJobsAndExceptions(client, 30);
-          logger.info(result, "Archiving and partition pre-creation completed");
+          logger.info({ jobId, workerId, ...result }, "Archiving and partition pre-creation completed");
         });
       } else {
         throw new Error(`Unsupported job type: ${job.job_type}`);
       }
-
-      // Mark completed
-      await withTransaction(async (client) => {
-        await completeJob(client, jobId);
-      });
-      logger.info({ jobId }, "Job completed successfully");
     } catch (err) {
-      logger.error({ err, jobId }, "Background job failed execution");
+      jobError = err;
+      logger.error({ err, jobId, jobType: job.job_type, workerId }, "Background job failed execution");
+    }
+
+    if (jobError === null) {
+      // Job completed successfully — mark in DB, guarded by ownership
+      try {
+        await withTransaction(async (client) => {
+          const updated = await completeJob(client, jobId, workerId);
+          if (!updated) {
+            // Another worker or recovery took ownership — do not complete
+            logger.warn({ jobId, workerId }, "completeJob: ownership lost before commit, skipping");
+          }
+        });
+        logger.info({ jobId, workerId }, "Job completed successfully");
+      } catch (dbErr) {
+        logger.error({ dbErr, jobId, workerId }, "DB error while marking job COMPLETED — job may remain RUNNING until recovery");
+      }
+    } else {
+      // Job failed — record failure, guard by ownership
       const attempts = job.attempts;
       const maxAttempts = job.max_attempts;
 
       try {
         if (attempts < maxAttempts) {
-          // Exponential backoff
           const delaySeconds = Math.pow(2, attempts) * 10;
           await withTransaction(async (client) => {
-            await failJob(client, jobId, err.message, delaySeconds);
+            const updated = await failJob(client, jobId, jobError.message, delaySeconds, workerId);
+            if (!updated) {
+              logger.warn({ jobId, workerId }, "failJob: ownership lost before recording failure, skipping");
+            }
           });
-          logger.info({ jobId, retryInSeconds: delaySeconds }, "Job failed, rescheduled for retry");
+          logger.info({ jobId, workerId, retryInSeconds: delaySeconds }, "Job failed, rescheduled for retry");
         } else {
-          // Move to DLQ
           await withTransaction(async (client) => {
-            await moveToDlq(client, jobId, err.message);
+            const moved = await moveToDlq(client, jobId, jobError.message, workerId);
+            if (!moved) {
+              logger.warn({ jobId, workerId }, "moveToDlq: ownership lost before DLQ move, skipping");
+            }
           });
-          logger.warn({ jobId }, "Job exceeded max attempts, moved to Dead Letter Queue (DLQ)");
+          logger.warn({ jobId, workerId }, "Job exceeded max attempts, moved to Dead Letter Queue (DLQ)");
         }
       } catch (dbErr) {
-        logger.error({ dbErr, jobId }, "Error recording job failure status");
+        // DB error while recording failure.
+        // The job is still RUNNING in the DB. We do NOT rethrow — that would
+        // leave it stuck forever if the process is restarted. Instead we log
+        // the critical error and let the recovery loop reclaim it after the
+        // heartbeat timeout expires.
+        logger.error({ dbErr, jobId, workerId }, "DB error recording job failure — recovery loop will reclaim the job");
       }
-    } finally {
-      this.activeJobs.delete(jobId);
-      // Check for next job immediately
-      setImmediate(() => this.poll());
     }
+
+    this.activeJobs.delete(jobId);
+    // Check for next job immediately
+    setImmediate(() => this.poll());
   }
 
   startHeartbeatLoop() {
@@ -153,7 +178,7 @@ export class JobWorker {
           }
         });
       } catch (err) {
-        logger.error({ err }, "Failed to update job heartbeats");
+        logger.error({ err, workerId: this.workerId }, "Failed to update job heartbeats");
       }
     }, this.heartbeatIntervalMs);
   }
@@ -162,20 +187,25 @@ export class JobWorker {
     this.recoveryTimer = setInterval(async () => {
       try {
         await withTransaction(async (client) => {
-          // Find running jobs with no heartbeat for 30s
+          // FOR UPDATE SKIP LOCKED in findOrphanedJobs prevents two recovery workers
+          // from processing the same stale job simultaneously.
           const orphaned = await findOrphanedJobs(client, 30);
           for (const job of orphaned) {
-            logger.warn({ jobId: job.job_id, worker: job.worker_owner }, "Orphaned job found, resetting/DLQing...");
+            logger.warn(
+              { jobId: job.job_id, staleOwner: job.worker_owner, workerId: this.workerId },
+              "Orphaned job found, resetting/DLQing..."
+            );
             if (job.attempts < job.max_attempts) {
               const delaySeconds = Math.pow(2, job.attempts) * 10;
-              await failJob(client, job.job_id, "Worker heartbeat timed out", delaySeconds);
+              // null workerOwner = recovery path, guard only on status = 'RUNNING'
+              await failJob(client, job.job_id, "Worker heartbeat timed out", delaySeconds, null);
             } else {
-              await moveToDlq(client, job.job_id, "Worker heartbeat timed out (Max retries exceeded)");
+              await moveToDlq(client, job.job_id, "Worker heartbeat timed out (Max retries exceeded)", null);
             }
           }
         });
       } catch (err) {
-        logger.error({ err }, "Failed during worker recovery supervisor check");
+        logger.error({ err, workerId: this.workerId }, "Failed during worker recovery supervisor check");
       }
     }, this.recoveryIntervalMs);
   }

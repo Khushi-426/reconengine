@@ -68,6 +68,8 @@ export async function claimNextJob(client, workerOwner) {
 
 /**
  * Updates the heartbeat timestamp for a worker's active running jobs.
+ * Guards on worker_owner AND status to prevent a stale worker from
+ * refreshing a heartbeat it no longer owns.
  */
 export async function updateJobHeartbeat(client, jobId, workerOwner) {
   const sql = `
@@ -80,62 +82,129 @@ export async function updateJobHeartbeat(client, jobId, workerOwner) {
 
 /**
  * Marks a job as completed.
+ * Guards on worker_owner AND status = 'RUNNING' so a stale worker cannot
+ * complete a job that has already been reclaimed by another worker or recovery.
+ * Returns null if the row was not updated (ownership lost).
  */
-export async function completeJob(client, jobId) {
+export async function completeJob(client, jobId, workerOwner) {
   const sql = `
     UPDATE background_jobs
     SET status = 'COMPLETED', completed_at = now(), updated_at = now()
     WHERE job_id = $1
+      AND status = 'RUNNING'
+      AND worker_owner = $2
     RETURNING job_id, status
   `;
-  const result = await client.query(sql, [jobId]);
-  return result.rows[0];
+  const result = await client.query(sql, [jobId, workerOwner]);
+  return result.rows[0] || null;
 }
 
 /**
- * Marks a job execution as failed, reschedules it with exponential backoff if possible.
+ * Marks a job execution as failed, reschedules it with exponential backoff.
+ *
+ * When called by a live worker (workerOwner is provided), guards on
+ * worker_owner AND status = 'RUNNING' so a stale worker cannot reschedule
+ * a job it no longer owns.
+ *
+ * When called by the recovery path (workerOwner is null/undefined), only
+ * guards on status = 'RUNNING' because the original owner is gone.
+ *
+ * Returns null if the row was not updated (ownership lost or wrong status).
  */
-export async function failJob(client, jobId, errorMessage, nextRunDelaySeconds) {
+export async function failJob(client, jobId, errorMessage, nextRunDelaySeconds, workerOwner) {
   const runAt = new Date(Date.now() + nextRunDelaySeconds * 1000);
-  const sql = `
-    UPDATE background_jobs
-    SET status = 'RETRYING', error_message = $1, run_at = $2, worker_owner = NULL, updated_at = now()
-    WHERE job_id = $3
-    RETURNING job_id, status, attempts, max_attempts
-  `;
-  const result = await client.query(sql, [errorMessage, runAt, jobId]);
-  return result.rows[0];
+
+  let sql, params;
+  if (workerOwner !== undefined && workerOwner !== null) {
+    sql = `
+      UPDATE background_jobs
+      SET status = 'RETRYING', error_message = $1, run_at = $2, worker_owner = NULL, updated_at = now()
+      WHERE job_id = $3
+        AND status = 'RUNNING'
+        AND worker_owner = $4
+      RETURNING job_id, status, attempts, max_attempts
+    `;
+    params = [errorMessage, runAt, jobId, workerOwner];
+  } else {
+    // Recovery path: guard only on status
+    sql = `
+      UPDATE background_jobs
+      SET status = 'RETRYING', error_message = $1, run_at = $2, worker_owner = NULL, updated_at = now()
+      WHERE job_id = $3
+        AND status = 'RUNNING'
+      RETURNING job_id, status, attempts, max_attempts
+    `;
+    params = [errorMessage, runAt, jobId];
+  }
+
+  const result = await client.query(sql, params);
+  return result.rows[0] || null;
 }
 
 /**
- * Moves a job into the Dead Letter Queue (dead_letter_jobs) and deletes it from active queue.
+ * Moves a job into the Dead Letter Queue atomically.
+ *
+ * Strategy: DELETE ... RETURNING from background_jobs (guards on status = 'RUNNING'
+ * and optionally worker_owner), then INSERT INTO dead_letter_jobs ON CONFLICT DO NOTHING.
+ * This guarantees atomicity within one transaction and idempotency against duplicate calls.
+ *
+ * Returns null if the job was not in the expected state (already moved or ownership lost).
  */
-export async function moveToDlq(client, jobId, errorMessage) {
-  // 1. Move to dead_letter_jobs
+export async function moveToDlq(client, jobId, errorMessage, workerOwner) {
+  let deleteSql, deleteParams;
+
+  if (workerOwner !== undefined && workerOwner !== null) {
+    deleteSql = `
+      DELETE FROM background_jobs
+      WHERE job_id = $1
+        AND status = 'RUNNING'
+        AND worker_owner = $2
+      RETURNING job_id, job_type, payload, priority, attempts
+    `;
+    deleteParams = [jobId, workerOwner];
+  } else {
+    // Recovery path
+    deleteSql = `
+      DELETE FROM background_jobs
+      WHERE job_id = $1
+        AND status = 'RUNNING'
+      RETURNING job_id, job_type, payload, priority, attempts
+    `;
+    deleteParams = [jobId];
+  }
+
+  const deleted = await client.query(deleteSql, deleteParams);
+  if (deleted.rowCount === 0) {
+    // Ownership already lost or job no longer in RUNNING — idempotent no-op
+    return null;
+  }
+
+  const { job_type, payload, priority, attempts } = deleted.rows[0];
+
+  // ON CONFLICT DO NOTHING makes this idempotent if somehow called twice
   const insertSql = `
     INSERT INTO dead_letter_jobs (job_id, job_type, payload, priority, attempts, last_error, failed_at)
-    SELECT job_id, job_type, payload, priority, attempts, $1, now()
-    FROM background_jobs
-    WHERE job_id = $2
+    VALUES ($1, $2, $3, $4, $5, $6, now())
+    ON CONFLICT (job_id) DO NOTHING
   `;
-  await client.query(insertSql, [errorMessage, jobId]);
+  await client.query(insertSql, [jobId, job_type, payload, priority, attempts, errorMessage]);
 
-  // 2. Remove from background_jobs
-  const deleteSql = `
-    DELETE FROM background_jobs
-    WHERE job_id = $1
-  `;
-  await client.query(deleteSql, [jobId]);
+  return deleted.rows[0];
 }
 
 /**
  * Finds running jobs that have timed out (no heartbeat update for threshold).
+ *
+ * Uses FOR UPDATE SKIP LOCKED so two simultaneous recovery workers cannot
+ * process the same orphaned job — identical to how claimNextJob prevents
+ * double-claim on PENDING jobs.
  */
 export async function findOrphanedJobs(client, timeoutSeconds) {
   const sql = `
     SELECT job_id, job_type, payload, attempts, max_attempts, priority, worker_owner
     FROM background_jobs
     WHERE status = 'RUNNING' AND last_heartbeat < now() - ($1 || ' seconds')::INTERVAL
+    FOR UPDATE SKIP LOCKED
   `;
   const result = await client.query(sql, [timeoutSeconds]);
   return result.rows;
