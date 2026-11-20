@@ -113,19 +113,14 @@ describe("AI Investigation Assistant Backend Unit & Security Suite", () => {
        VALUES ('2026-07-20', $1, 'COMPLETED') RETURNING run_id`,
       [externalBatchId]
     );
-    const ldgRes = await testPool.query(
-      `INSERT INTO ledger_transactions (account_id, txn_ref, txn_type, amount, currency, value_date)
-       VALUES ($1, 'TXN-DISC-2', 'CREDIT', 100.00, 'GBP', '2026-07-20') RETURNING ledger_txn_id`,
-      [accountId]
-    );
     const exRes = await testPool.query(
-      `INSERT INTO reconciliation_exceptions (run_id, ledger_txn_id, exception_type, status, assigned_to)
-       VALUES ($1, $2, 'MISSING_EXTERNAL', 'ASSIGNED', $3) RETURNING exception_id`,
-      [runRes.rows[0].run_id, ldgRes.rows[0].ledger_txn_id, analystId] // assigned to analystId
+      `INSERT INTO reconciliation_exceptions (run_id, exception_type, status, assigned_to)
+       VALUES ($1, 'MISSING_EXTERNAL', 'ASSIGNED', $2) RETURNING exception_id`,
+      [runRes.rows[0].run_id, analystId] // assigned to analystId
     );
     const exceptionId = exRes.rows[0].exception_id;
 
-    // otherAnalyst attempts to investigate - RLS filters out rows assigned to other analysts
+    // otherAnalyst attempts to investigate
     await expect(
       investigateException({
         exceptionId,
@@ -134,8 +129,8 @@ describe("AI Investigation Assistant Backend Unit & Security Suite", () => {
         correlationId: "test-corr-denied",
       })
     ).rejects.toMatchObject({
-      statusCode: 404,
-      code: "EXCEPTION_NOT_FOUND",
+      statusCode: 403,
+      code: "FORBIDDEN",
     });
   });
 
@@ -190,15 +185,10 @@ describe("AI Investigation Assistant Backend Unit & Security Suite", () => {
        VALUES ('2026-07-20', $1, 'COMPLETED') RETURNING run_id`,
       [externalBatchId]
     );
-    const ldgRes = await testPool.query(
-      `INSERT INTO ledger_transactions (account_id, txn_ref, txn_type, amount, currency, value_date)
-       VALUES ($1, 'TXN-DISC-4', 'CREDIT', 100.00, 'GBP', '2026-07-20') RETURNING ledger_txn_id`,
-      [accountId]
-    );
     const exRes = await testPool.query(
-      `INSERT INTO reconciliation_exceptions (run_id, ledger_txn_id, exception_type, status, assigned_to)
-       VALUES ($1, $2, 'MISSING_EXTERNAL', 'ASSIGNED', $3) RETURNING exception_id`,
-      [runRes.rows[0].run_id, ldgRes.rows[0].ledger_txn_id, analystId]
+      `INSERT INTO reconciliation_exceptions (run_id, exception_type, status, assigned_to)
+       VALUES ($1, 'MISSING_EXTERNAL', 'ASSIGNED', $2) RETURNING exception_id`,
+      [runRes.rows[0].run_id, analystId]
     );
     const exceptionId = exRes.rows[0].exception_id;
 
@@ -229,3 +219,4 @@ describe("AI Investigation Assistant Backend Unit & Security Suite", () => {
     expect(exCheck.rows[0].version).toBe(1);
   });
 });
+
