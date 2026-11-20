@@ -1,3 +1,15 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  body {
+    @apply antialiased text-slate-800 bg-slate-50 dark:bg-slate-950 dark:text-slate-100 font-sans;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  /* Force tabular numerals on all numeric, currency, code, and date elements */
+  .font-mono, td, th, [data-tabular] {
+    font-variant-numeric: tabular-nums;
+  }
+}
